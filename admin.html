@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin - Casa José Silva</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75'>⚙️</text></svg>">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="admin.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ==================== LOGIN ==================== -->
+<section class="login-page" id="loginPage">
+  <div class="login-card">
+    <div class="login-card__logo">
+      <span>🍕</span>
+      <h1>Casa José Silva</h1>
+      <p>Painel Administrativo</p>
+    </div>
+    <form id="adminLoginForm">
+      <div class="form-group">
+        <label for="adminEmail">E-mail</label>
+        <input type="email" id="adminEmail" placeholder="admin@email.com" required>
+      </div>
+      <div class="form-group">
+        <label for="adminPassword">Senha</label>
+        <input type="password" id="adminPassword" placeholder="Sua senha" required>
+      </div>
+      <button type="submit" class="btn btn--primary btn--full" id="btnAdminLogin">
+        <i class="fas fa-sign-in-alt"></i> Entrar
+      </button>
+      <p class="login-error hidden" id="loginError"></p>
+    </form>
+  </div>
+</section>
+
+<!-- ==================== ADMIN DASHBOARD ==================== -->
+<section class="admin hidden" id="adminPanel">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar__header">
+      <span class="sidebar__logo">🍕</span>
+      <div>
+        <div class="sidebar__brand">Casa José Silva</div>
+        <div class="sidebar__sub">Admin</div>
+      </div>
+    </div>
+    <nav class="sidebar__nav">
+      <button class="nav-item active" data-page="dashboard"><i class="fas fa-chart-line"></i> Dashboard</button>
+      <button class="nav-item" data-page="pedidos"><i class="fas fa-receipt"></i> Pedidos</button>
+      <button class="nav-item" data-page="cardapio"><i class="fas fa-pizza-slice"></i> Cardápio</button>
+      <button class="nav-item" data-page="clientes"><i class="fas fa-users"></i> Clientes</button>
+      <button class="nav-item" data-page="config"><i class="fas fa-cog"></i> Configurações</button>
+    </nav>
+    <div class="sidebar__footer">
+      <div class="sidebar__user" id="adminUserInfo">Admin</div>
+      <button class="sidebar__logout" id="btnAdminLogout"><i class="fas fa-sign-out-alt"></i> Sair</button>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main">
+    <!-- Top bar -->
+    <header class="main__topbar">
+      <button class="hamburger" id="btnHamburger"><i class="fas fa-bars"></i></button>
+      <h1 class="main__title" id="pageTitle">Dashboard</h1>
+      <div class="main__topbar-right">
+        <span class="main__date" id="currentDate"></span>
+        <a href="index.html" target="_blank" class="btn btn--outline-sm"><i class="fas fa-external-link-alt"></i> Ver Site</a>
+      </div>
+    </header>
+
+    <!-- ====== DASHBOARD PAGE ====== -->
+    <div class="page active" id="pageDashboard">
+      <!-- KPI Cards -->
+      <div class="kpis" id="kpiCards">
+        <div class="kpi-card">
+          <div class="kpi-card__icon" style="background:rgba(76,175,80,.1);color:#4CAF50;"><i class="fas fa-dollar-sign"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Faturamento Hoje</span>
+            <span class="kpi-card__value" id="kpiRevenueToday">R$ 0,00</span>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-card__icon" style="background:rgba(33,150,243,.1);color:#2196F3;"><i class="fas fa-shopping-cart"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Pedidos Hoje</span>
+            <span class="kpi-card__value" id="kpiOrdersToday">0</span>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-card__icon" style="background:rgba(255,152,0,.1);color:#FF9800;"><i class="fas fa-receipt"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Ticket Médio</span>
+            <span class="kpi-card__value" id="kpiAvgTicket">R$ 0,00</span>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-card__icon" style="background:rgba(156,39,176,.1);color:#9C27B0;"><i class="fas fa-calendar-alt"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Faturamento Mês</span>
+            <span class="kpi-card__value" id="kpiRevenueMonth">R$ 0,00</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Charts -->
+      <div class="charts-row">
+        <div class="chart-card">
+          <h3>Faturamento - Últimos 7 dias</h3>
+          <canvas id="chartRevenue"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Pedidos por Status</h3>
+          <canvas id="chartStatus"></canvas>
+        </div>
+      </div>
+
+      <!-- Recent Orders -->
+      <div class="card">
+        <div class="card__header"><h3>Pedidos Recentes</h3></div>
+        <div class="card__body">
+          <table class="table">
+            <thead><tr><th>#</th><th>Cliente</th><th>Total</th><th>Status</th><th>Data</th></tr></thead>
+            <tbody id="recentOrdersBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== PEDIDOS PAGE ====== -->
+    <div class="page" id="pagePedidos">
+      <div class="page__toolbar">
+        <div class="filter-group">
+          <select id="filterStatus">
+            <option value="">Todos os Status</option>
+            <option value="pendente">Pendente</option>
+            <option value="confirmado">Confirmado</option>
+            <option value="preparando">Preparando</option>
+            <option value="saiu_entrega">Saiu p/ Entrega</option>
+            <option value="entregue">Entregue</option>
+            <option value="cancelado">Cancelado</option>
+          </select>
+          <input type="date" id="filterDate">
+        </div>
+        <button class="btn btn--outline-sm" id="btnRefreshOrders"><i class="fas fa-sync-alt"></i> Atualizar</button>
+      </div>
+      <div class="card">
+        <div class="card__body">
+          <table class="table">
+            <thead><tr><th>#</th><th>Cliente</th><th>Itens</th><th>Total</th><th>Entrega</th><th>Status</th><th>Data</th><th>Ações</th></tr></thead>
+            <tbody id="ordersTableBody"></tbody>
+          </table>
+          <div class="empty-state hidden" id="ordersEmpty"><i class="fas fa-inbox"></i><p>Nenhum pedido encontrado</p></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== CARDÁPIO PAGE ====== -->
+    <div class="page" id="pageCardapio">
+      <div class="page__toolbar">
+        <button class="btn btn--primary" id="btnAddProduct"><i class="fas fa-plus"></i> Novo Produto</button>
+        <div class="filter-group">
+          <select id="filterCategory">
+            <option value="">Todas Categorias</option>
+          </select>
+          <input type="text" id="filterProduct" placeholder="Buscar produto...">
+        </div>
+      </div>
+      <div class="card">
+        <div class="card__body">
+          <table class="table">
+            <thead><tr><th>Img</th><th>Nome</th><th>Categoria</th><th>Preço</th><th>Destaque</th><th>Disponível</th><th>Ações</th></tr></thead>
+            <tbody id="productsTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== CLIENTES PAGE ====== -->
+    <div class="page" id="pageClientes">
+      <div class="card">
+        <div class="card__header"><h3>Clientes</h3></div>
+        <div class="card__body">
+          <table class="table">
+            <thead><tr><th>Nome</th><th>Email</th><th>Telefone</th><th>Pedidos</th><th>Total Gasto</th></tr></thead>
+            <tbody id="clientsTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== CONFIG PAGE ====== -->
+    <div class="page" id="pageConfig">
+      <div class="config-grid" id="configGrid">
+        <!-- Populated by JS -->
+      </div>
+      <div class="config-actions">
+        <button class="btn btn--primary" id="btnSaveConfig"><i class="fas fa-save"></i> Salvar Configurações</button>
+      </div>
+    </div>
+  </main>
+</section>
+
+<!-- ==================== PRODUCT MODAL ==================== -->
+<div class="modal-overlay hidden" id="productFormModal">
+  <div class="modal modal--form">
+    <div class="modal__header">
+      <h2 id="productFormTitle">Novo Produto</h2>
+      <button class="modal__close" data-close="productFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <form id="productForm">
+        <input type="hidden" id="productId">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="productNome">Nome</label>
+            <input type="text" id="productNome" required>
+          </div>
+          <div class="form-group">
+            <label for="productCategoria">Categoria</label>
+            <input type="text" id="productCategoria" list="categoryList" required>
+            <datalist id="categoryList"></datalist>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="productDescricao">Descrição</label>
+          <textarea id="productDescricao" rows="3"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="productPreco">Preço (R$)</label>
+            <input type="number" id="productPreco" step="0.01" min="0" required>
+          </div>
+          <div class="form-group">
+            <label for="productOrdem">Ordem</label>
+            <input type="number" id="productOrdem" value="0">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="productImagem">URL da Imagem</label>
+          <input type="url" id="productImagem" placeholder="https://...">
+        </div>
+        <div class="form-row">
+          <label class="switch-label">
+            <input type="checkbox" id="productDisponivel" checked>
+            <span class="switch"></span> Disponível
+          </label>
+          <label class="switch-label">
+            <input type="checkbox" id="productDestaque">
+            <span class="switch"></span> Destaque
+          </label>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn--outline-sm" data-close="productFormModal">Cancelar</button>
+          <button type="submit" class="btn btn--primary" id="btnSaveProduct">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ORDER DETAIL MODAL ==================== -->
+<div class="modal-overlay hidden" id="orderDetailModal">
+  <div class="modal modal--form">
+    <div class="modal__header">
+      <h2>Detalhes do Pedido</h2>
+      <button class="modal__close" data-close="orderDetailModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body" id="orderDetailBody"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast hidden" id="toast"></div>
+
+<script src="admin.js"></script>
+</body>
+</html>

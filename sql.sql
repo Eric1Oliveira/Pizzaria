@@ -1,0 +1,354 @@
+esse era o sql 
+
+-- ============================================================
+-- CASA JOSÉ SILVA — SQL COMPLETO
+-- Apaga tudo e recria do zero. Cole no SQL Editor do Supabase.
+-- ============================================================
+
+-- ============================================================
+-- 1. LIMPAR TUDO (verifica se tabela existe antes de dropar policies)
+-- ============================================================
+DO $$
+BEGIN
+  -- Produtos
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='produtos') THEN
+    DROP POLICY IF EXISTS "Produtos visíveis para todos" ON produtos;
+    DROP POLICY IF EXISTS "Admins gerenciam produtos" ON produtos;
+    DROP POLICY IF EXISTS "Admins editam produtos" ON produtos;
+    DROP POLICY IF EXISTS "Admins deletam produtos" ON produtos;
+  END IF;
+  -- Pedidos
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='pedidos') THEN
+    DROP POLICY IF EXISTS "Usuários podem criar seus pedidos" ON pedidos;
+    DROP POLICY IF EXISTS "Usuários veem apenas seus pedidos" ON pedidos;
+    DROP POLICY IF EXISTS "Admins atualizam pedidos" ON pedidos;
+  END IF;
+  -- Site Config
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='site_config') THEN
+    DROP POLICY IF EXISTS "Config visível para todos" ON site_config;
+    DROP POLICY IF EXISTS "Admins editam config" ON site_config;
+  END IF;
+  -- Admin Users
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='admin_users') THEN
+    DROP POLICY IF EXISTS "Admin read" ON admin_users;
+    DROP POLICY IF EXISTS "Admin update" ON admin_users;
+    DROP POLICY IF EXISTS "Users can check own admin status" ON admin_users;
+    DROP POLICY IF EXISTS "Users can link own auth_user_id" ON admin_users;
+  END IF;
+END $$;
+
+DROP TABLE IF EXISTS admin_users CASCADE;
+DROP TABLE IF EXISTS site_config CASCADE;
+DROP TABLE IF EXISTS pedidos CASCADE;
+DROP TABLE IF EXISTS produtos CASCADE;
+
+DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;
+DROP FUNCTION IF EXISTS is_admin() CASCADE;
+
+-- ============================================================
+-- 2. TABELA DE PRODUTOS
+--    Colunas: nome, descricao, preco, categoria, imagem_url
+--    (nomes em português = mesmo que o JS usa)
+-- ============================================================
+CREATE TABLE produtos (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  nome TEXT NOT NULL,
+  descricao TEXT,
+  preco NUMERIC(10,2) NOT NULL CHECK (preco >= 0),
+  categoria TEXT NOT NULL,
+  subcategoria TEXT,
+  imagem_url TEXT,
+  disponivel BOOLEAN NOT NULL DEFAULT true,
+  destaque BOOLEAN NOT NULL DEFAULT false,
+  ordem INT DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_produtos_disponivel ON produtos (disponivel);
+CREATE INDEX idx_produtos_categoria  ON produtos (categoria);
+CREATE INDEX idx_produtos_destaque   ON produtos (destaque);
+
+-- ============================================================
+-- 3. TABELA DE PEDIDOS
+--    Colunas: nome_cliente, email_cliente, telefone_cliente,
+--    endereco_entrega, forma_entrega, forma_pagamento, etc.
+-- ============================================================
+CREATE TABLE pedidos (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  nome_cliente TEXT NOT NULL,
+  email_cliente TEXT NOT NULL,
+  telefone_cliente TEXT,
+  endereco_entrega TEXT,
+  observacoes TEXT,
+  forma_entrega TEXT DEFAULT 'delivery' CHECK (forma_entrega IN ('delivery','retirada')),
+  forma_pagamento TEXT DEFAULT 'infinitepay',
+  itens JSONB NOT NULL DEFAULT '[]'::jsonb,
+  total NUMERIC(10,2) NOT NULL CHECK (total >= 0),
+  status TEXT NOT NULL DEFAULT 'pendente'
+    CHECK (status IN ('pendente','confirmado','preparando','saiu_entrega','entregue','cancelado')),
+  infinitepay_ref TEXT,
+  checkout_url TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_pedidos_user_id    ON pedidos (user_id);
+CREATE INDEX idx_pedidos_status     ON pedidos (status);
+CREATE INDEX idx_pedidos_created_at ON pedidos (created_at DESC);
+
+-- ============================================================
+-- 4. TABELA DE ADMINISTRADORES
+--    admin.js lê .nome e .email
+-- ============================================================
+CREATE TABLE admin_users (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  auth_user_id UUID UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+  nome TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('admin','superadmin')),
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ============================================================
+-- 5. TABELA DE CONFIGURAÇÃO DO SITE
+--    Chaves devem bater exatamente com admin.js configSections
+-- ============================================================
+CREATE TABLE site_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'text'
+    CHECK (type IN ('text','color','url','json','number','boolean','image')),
+  label TEXT NOT NULL,
+  section TEXT NOT NULL DEFAULT 'geral',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ============================================================
+-- 6. FUNÇÃO: VERIFICAR SE É ADMIN
+-- ============================================================
+CREATE OR REPLACE FUNCTION is_admin()
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM admin_users
+    WHERE auth_user_id = auth.uid() AND active = true
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+
+-- ============================================================
+-- 7. TRIGGER updated_at
+-- ============================================================
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_produtos_updated_at
+  BEFORE UPDATE ON produtos
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER trigger_pedidos_updated_at
+  BEFORE UPDATE ON pedidos
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
+-- 8. ROW LEVEL SECURITY
+-- ============================================================
+
+-- PRODUTOS (qualquer um lê, só admin escreve)
+ALTER TABLE produtos ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Produtos visíveis para todos"
+  ON produtos FOR SELECT USING (true);
+
+CREATE POLICY "Admins gerenciam produtos"
+  ON produtos FOR INSERT TO authenticated
+  WITH CHECK (is_admin());
+
+CREATE POLICY "Admins editam produtos"
+  ON produtos FOR UPDATE TO authenticated
+  USING (is_admin());
+
+CREATE POLICY "Admins deletam produtos"
+  ON produtos FOR DELETE TO authenticated
+  USING (is_admin());
+
+-- PEDIDOS (usuário cria/lê os seus, admin lê/edita todos)
+ALTER TABLE pedidos ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Usuários podem criar seus pedidos"
+  ON pedidos FOR INSERT TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Usuários veem apenas seus pedidos"
+  ON pedidos FOR SELECT TO authenticated
+  USING (auth.uid() = user_id OR is_admin());
+
+CREATE POLICY "Admins atualizam pedidos"
+  ON pedidos FOR UPDATE TO authenticated
+  USING (is_admin());
+
+-- SITE_CONFIG (qualquer um lê, admin edita)
+ALTER TABLE site_config ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Config visível para todos"
+  ON site_config FOR SELECT USING (true);
+
+CREATE POLICY "Admins editam config"
+  ON site_config FOR ALL TO authenticated
+  USING (is_admin())
+  WITH CHECK (is_admin());
+
+-- ADMIN_USERS
+-- Permite que o próprio usuário leia sua linha (por email do JWT)
+-- e que admins confirmados leiam/editem tudo.
+ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can check own admin status"
+  ON admin_users FOR SELECT TO authenticated
+  USING (
+    email = (auth.jwt() ->> 'email')
+    OR is_admin()
+  );
+
+CREATE POLICY "Users can link own auth_user_id"
+  ON admin_users FOR UPDATE TO authenticated
+  USING (
+    email = (auth.jwt() ->> 'email')
+    OR is_admin()
+  )
+  WITH CHECK (
+    email = (auth.jwt() ->> 'email')
+    OR is_admin()
+  );
+
+-- ============================================================
+-- 9. CONFIGURAÇÕES INICIAIS DO SITE
+--    As chaves (key) e seções (section) batem com admin.js
+-- ============================================================
+INSERT INTO site_config (key, value, type, label, section) VALUES
+-- Geral
+('restaurant_name',      'CASA JOSÉ SILVA',                                 'text',  'Nome do Restaurante',          'geral'),
+('restaurant_subtitle',  'empório & café',                                  'text',  'Subtítulo',                    'geral'),
+('footer_text',          '© 2024 Casa José Silva - Todos os direitos reservados', 'text', 'Texto do Rodapé',        'geral'),
+-- Contato
+('whatsapp_number',      '5511916835853',                                   'text',  'WhatsApp (com DDI)',           'contato'),
+('instagram_url',        'https://instagram.com/emporiocasajosessilva',     'url',   'Instagram URL',                'contato'),
+('email',                'contato@emporiocasajosessilva.com.br',            'text',  'E-mail',                       'contato'),
+('facebook_url',         'https://facebook.com/emporiocasajosessilva',      'url',   'Facebook URL',                 'contato'),
+-- Endereço
+('address',              'Rua Banda, 733 – Jardim do Mar, São Bernardo do Campo – SP', 'text', 'Endereço',           'endereco'),
+('google_maps_embed',    'https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3654.4789234567890!2d-46.53!3d-23.69', 'url', 'Google Maps Embed URL', 'endereco'),
+('google_maps_link',     'https://www.google.com/maps/search/?api=1&query=Rua+Banda%2C+733%2C+Jardim+do+Mar%2C+S%C3%A3o+Bernardo+do+Campo%2C+SP', 'url', 'Google Maps Link', 'endereco'),
+-- Entrega
+('delivery_fee',         '5.00',        'number', 'Taxa de Entrega (R$)',        'entrega'),
+('min_order',            '25.00',       'number', 'Pedido Mínimo (R$)',          'entrega'),
+('delivery_time',        '40-60 min',   'text',   'Tempo Estimado de Entrega',   'entrega'),
+-- Pagamento
+('infinitepay_handle',   'eric-eduardo-p78', 'text', 'Handle InfinitePay',       'pagamento'),
+-- Visual
+('primary_color',        '#D4AF37',     'color',  'Cor Principal (Ouro)',        'visual'),
+('accent_color',         '#4A7043',     'color',  'Cor de Destaque (Verde)',     'visual'),
+('hero_image',           '',            'image',  'Imagem de Destaque (URL)',    'visual'),
+-- Horários (JSON para uso futuro)
+('horarios', '[{"dia":"Domingo","horario":"18:00 às 22:00"},{"dia":"Segunda-feira","horario":"11:00 às 15:00"},{"dia":"Terça-feira","horario":"11:00 às 15:00 / 18:00 às 22:00"},{"dia":"Quarta-feira","horario":"11:00 às 15:00 / 18:00 às 22:00"},{"dia":"Quinta-feira","horario":"11:00 às 15:00 / 18:00 às 22:00"},{"dia":"Sexta-feira","horario":"11:00 às 15:00 / 18:00 às 23:30"},{"dia":"Sábado","horario":"11:00 às 15:00 / 18:00 às 23:30"}]', 'json', 'Horários de Funcionamento', 'horarios');
+
+-- ============================================================
+-- 10. DADOS INICIAIS DO CARDÁPIO
+--     Colunas: nome, descricao, preco, categoria, subcategoria,
+--     imagem_url, disponivel, destaque, ordem
+-- ============================================================
+INSERT INTO produtos (nome, descricao, preco, categoria, subcategoria, imagem_url, disponivel, destaque, ordem) VALUES
+-- Menu
+('Menu Executivo Individual', 'Prato principal, arroz, feijão, salada e bebida',               28.00, 'menu', '1pessoa',  'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&h=300&fit=crop', true, false, 1),
+('Menu para Casal',           'Dois pratos principais, arroz, feijão, salada e 2 bebidas',     52.00, 'menu', '2pessoas', 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&h=300&fit=crop', true, false, 2),
+('Menu Família',              'Quatro pratos principais, arroz, feijão, salada e 4 bebidas',   98.00, 'menu', '4pessoas', 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&h=300&fit=crop', true, true,  3),
+-- Entradas
+('Bruschetta Tradicional',    'Pão italiano, tomate, manjericão e azeite',                     18.90, 'entradas', NULL, 'https://images.unsplash.com/photo-1572695157366-5e585ab2b69f?w=400&h=300&fit=crop', true, false, 10),
+('Bolinho de Bacalhau',       '6 unidades com molho especial',                                 24.90, 'entradas', NULL, NULL, true, false, 11),
+-- Pizzas Tradicionais (8 fatias)
+('Pizza Margherita',           'Molho de tomate, muçarela de búfala e manjericão',             45.90, 'pizzas-tradicionais', '8fatias', 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&h=300&fit=crop', true, true,  20),
+('Pizza Calabresa',            'Calabresa fatiada, cebola e azeitona',                         42.90, 'pizzas-tradicionais', '8fatias', 'https://images.unsplash.com/photo-1628840042765-356cda07504e?w=400&h=300&fit=crop', true, true,  21),
+('Pizza Portuguesa',           'Presunto, ovos, cebola, azeitona e ervilha',                   48.90, 'pizzas-tradicionais', '8fatias', NULL, true, false, 22),
+('Pizza Frango com Catupiry',  'Frango desfiado com catupiry cremoso',                         46.90, 'pizzas-tradicionais', '8fatias', NULL, true, false, 23),
+-- Pizzas Tradicionais (4 fatias)
+('Pizza Margherita (4 fatias)', 'Molho de tomate, muçarela de búfala e manjericão',            28.90, 'pizzas-tradicionais', '4fatias', 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&h=300&fit=crop', true, false, 24),
+('Pizza Calabresa (4 fatias)',  'Calabresa fatiada, cebola e azeitona',                        26.90, 'pizzas-tradicionais', '4fatias', NULL, true, false, 25),
+-- Pizzas Especiais (8 fatias)
+('Pizza Quatro Queijos',       'Muçarela, provolone, gorgonzola e parmesão',                   54.90, 'pizzas-especiais', '8fatias', NULL, true, true,  30),
+('Pizza Filé Mignon',          'Filé mignon, cebola caramelizada e cream cheese',              58.90, 'pizzas-especiais', '8fatias', NULL, true, true,  31),
+('Pizza Camarão',              'Camarão, catupiry e tomate seco',                              62.90, 'pizzas-especiais', '8fatias', NULL, true, false, 32),
+-- Pizzas Especiais (4 fatias)
+('Pizza Quatro Queijos (4 fatias)', 'Muçarela, provolone, gorgonzola e parmesão',              34.90, 'pizzas-especiais', '4fatias', NULL, true, false, 33),
+('Pizza Filé Mignon (4 fatias)',    'Filé mignon, cebola caramelizada e cream cheese',         36.90, 'pizzas-especiais', '4fatias', NULL, true, false, 34),
+-- Pizzas Doces (8 fatias)
+('Pizza Chocolate',            'Chocolate ao leite com morangos frescos',                      48.90, 'pizzas-doces', '8fatias', 'https://images.unsplash.com/photo-1513104890138-7c749659a591?w=400&h=300&fit=crop', true, false, 40),
+('Pizza Brigadeiro',           'Brigadeiro cremoso com granulado',                             46.90, 'pizzas-doces', '8fatias', NULL, true, false, 41),
+('Pizza Romeu e Julieta',      'Goiabada com queijo minas derretido',                          44.90, 'pizzas-doces', '8fatias', NULL, true, false, 42),
+-- Pizzas Doces (4 fatias)
+('Pizza Chocolate (4 fatias)', 'Chocolate ao leite com morangos frescos',                      29.90, 'pizzas-doces', '4fatias', NULL, true, false, 43),
+('Pizza Brigadeiro (4 fatias)','Brigadeiro cremoso com granulado',                             28.90, 'pizzas-doces', '4fatias', NULL, true, false, 44),
+-- Bebidas
+('Refrigerante Lata',          'Coca-Cola, Guaraná ou Fanta',                                   6.00, 'bebidas', NULL, NULL, true, false, 50),
+('Suco Natural 500ml',         'Laranja, limão ou abacaxi',                                    12.00, 'bebidas', NULL, NULL, true, false, 51),
+('Água Mineral 500ml',         'Com ou sem gás',                                                4.00, 'bebidas', NULL, NULL, true, false, 52),
+-- Cervejas
+('Heineken Long Neck',         '330ml gelada',                                                  9.90, 'cervejas', NULL, NULL, true, false, 60),
+('Brahma Duplo Malte',         '350ml gelada',                                                  8.90, 'cervejas', NULL, NULL, true, false, 61),
+('Corona Extra',               '330ml gelada',                                                 12.90, 'cervejas', NULL, NULL, true, false, 62),
+-- Drinks
+('Caipirinha',                 'Limão, vodka ou cachaça',                                      18.00, 'drinks', NULL, NULL, true, false, 70),
+('Mojito',                     'Hortelã, limão e rum',                                         22.00, 'drinks', NULL, NULL, true, false, 71),
+('Gin Tônica',                 'Gin, água tônica, limão e especiarias',                        24.00, 'drinks', NULL, NULL, true, false, 72),
+-- Sobremesas
+('Petit Gateau',               'Bolo de chocolate com sorvete de creme',                       16.90, 'sobremesas', NULL, NULL, true, false, 80),
+('Torta de Limão',             'Massa crocante com creme de limão',                            14.90, 'sobremesas', NULL, NULL, true, false, 81),
+('Açaí 500ml',                 'Açaí com banana, granola e leite condensado',                  19.90, 'sobremesas', NULL, NULL, true, false, 82);
+
+-- ============================================================
+-- 11. CRIAR ADMIN INICIAL
+-- ============================================================
+-- PASSO A PASSO:
+-- 1) Acesse o site (index.html) e crie uma conta com seu email
+-- 2) Volte aqui e execute o comando abaixo substituindo o email:
+--
+-- INSERT INTO admin_users (auth_user_id, nome, email, role)
+-- SELECT id, 'Seu Nome', 'SEU_EMAIL@AQUI.COM', 'superadmin'
+-- FROM auth.users WHERE email = 'SEU_EMAIL@AQUI.COM';
+--
+-- Pronto! Agora esse email pode acessar admin.html.
+-- ============================================================
+
+-- ============================================================
+-- 12. SUPABASE STORAGE — BUCKET DE IMAGENS
+-- Cole no SQL Editor do Supabase para criar o bucket e as policies.
+-- ============================================================
+INSERT INTO storage.buckets (id, name, public) VALUES ('images', 'images', true)
+ON CONFLICT (id) DO NOTHING;
+
+-- Admins podem fazer upload
+CREATE POLICY "Admins podem enviar imagens" ON storage.objects FOR INSERT
+  TO authenticated
+  WITH CHECK (bucket_id = 'images' AND is_admin());
+
+-- Admins podem atualizar
+CREATE POLICY "Admins podem atualizar imagens" ON storage.objects FOR UPDATE
+  TO authenticated
+  USING (bucket_id = 'images' AND is_admin());
+
+-- Admins podem deletar
+CREATE POLICY "Admins podem deletar imagens" ON storage.objects FOR DELETE
+  TO authenticated
+  USING (bucket_id = 'images' AND is_admin());
+
+-- Todos podem visualizar (bucket público)
+CREATE POLICY "Imagens públicas para leitura" ON storage.objects FOR SELECT
+  TO public
+  USING (bucket_id = 'images');

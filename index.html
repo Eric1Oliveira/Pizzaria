@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Casa José Silva - Delivery Premium</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75'>🍕</text></svg>">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer></script>
+</head>
+<body>
+
+<!-- ==================== SPLASH SCREEN ==================== -->
+<section class="splash" id="splashScreen">
+  <div class="splash__bg"></div>
+  <div class="splash__content">
+    <div class="splash__logo">
+      <div class="splash__icon">🍕</div>
+      <div class="splash__name" id="restaurantName">CASA JOSÉ SILVA</div>
+      <div class="splash__sub" id="restaurantSubtitle">empório &amp; café</div>
+    </div>
+    <div class="splash__status" id="statusBar">
+      <span class="status-dot"></span>
+      <span class="status-text">Verificando...</span>
+    </div>
+    <div class="splash__actions">
+      <button class="btn btn--primary btn--lg" id="btnFazerPedido">
+        <i class="fas fa-utensils"></i> Fazer Pedido
+      </button>
+      <div class="splash__row">
+        <button class="btn btn--outline" id="btnMeusPedidos">
+          <i class="fas fa-clipboard-list"></i> Meus Pedidos
+        </button>
+        <button class="btn btn--outline" id="btnMinhaConta">
+          <i class="fas fa-user"></i> Minha Conta
+        </button>
+      </div>
+      <button class="btn btn--outline hidden" id="btnAdminPanel" style="margin-top:6px;border-color:var(--gold);color:var(--gold);">
+        <i class="fas fa-cog"></i> Painel Admin
+      </button>
+    </div>
+    <div class="splash__chips">
+      <button class="chip" id="btnHoursFAB"><i class="fas fa-clock"></i> Horários</button>
+      <button class="chip" id="btnLocation"><i class="fas fa-map-marker-alt"></i> Local</button>
+      <button class="chip" id="btnContactChip"><i class="fas fa-phone"></i> Contato</button>
+    </div>
+  </div>
+  <div class="splash__socials">
+    <a href="https://wa.me/5511916835853" target="_blank" rel="noopener noreferrer" class="social-fab social-fab--whatsapp" aria-label="WhatsApp"><i class="fab fa-whatsapp"></i></a>
+    <a href="https://instagram.com/emporiocasajosessilva" target="_blank" rel="noopener noreferrer" class="social-fab social-fab--instagram" aria-label="Instagram"><i class="fab fa-instagram"></i></a>
+  </div>
+</section>
+
+<!-- ==================== MENU PAGE ==================== -->
+<section class="menu-page hidden" id="menuPage">
+  <header class="topbar">
+    <button class="topbar__btn" id="btnBackToHome" aria-label="Voltar"><i class="fas fa-arrow-left"></i></button>
+    <div class="topbar__brand">
+      <span class="topbar__name" id="menuLogoMain">CASA JOSÉ SILVA</span>
+      <span class="topbar__sub" id="menuLogoSub">empório &amp; café</span>
+    </div>
+    <div class="topbar__right">
+      <button class="topbar__btn" id="btnSearch" aria-label="Buscar"><i class="fas fa-search"></i></button>
+      <button class="topbar__btn topbar__cart-btn" id="btnCartMenu" aria-label="Carrinho">
+        <i class="fas fa-shopping-bag"></i>
+        <span class="topbar__badge" id="cartBadgeMenu">0</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Search bar -->
+  <div class="search-bar hidden" id="searchBar">
+    <div class="search-bar__inner">
+      <i class="fas fa-search"></i>
+      <input type="text" id="searchInput" placeholder="Buscar no cardápio..." autocomplete="off">
+      <button class="search-bar__close" id="btnCloseSearch"><i class="fas fa-times"></i></button>
+    </div>
+  </div>
+
+  <!-- Destaques carousel -->
+  <section class="featured hidden" id="featuredSection">
+    <h2 class="section-title"><i class="fas fa-star"></i> Destaques</h2>
+    <div class="featured__scroll" id="featuredScroll"></div>
+  </section>
+
+  <!-- Category tabs -->
+  <nav class="cat-nav" id="catNav">
+    <div class="cat-nav__scroll" id="catNavScroll">
+      <button class="cat-tab active" data-category="todos">Todos</button>
+    </div>
+  </nav>
+
+  <!-- Info bar -->
+  <div class="info-strip">
+    <span><i class="fas fa-truck"></i> <span id="tempoEntrega">40-60 min</span></span>
+    <span><i class="fas fa-receipt"></i> Mín: R$ <span id="pedidoMinimo">25,00</span></span>
+    <span><i class="fas fa-money-bill-wave"></i> Entrega: R$ <span id="taxaEntrega">5,00</span></span>
+  </div>
+
+  <!-- Products grid -->
+  <main class="products" id="productsGrid">
+    <div class="loader" id="productsLoader"><div class="loader__spinner"></div><p>Carregando cardápio...</p></div>
+  </main>
+
+  <!-- Floating cart button (mobile) -->
+  <button class="fab-cart hidden" id="fabCart">
+    <i class="fas fa-shopping-bag"></i>
+    <span class="fab-cart__badge" id="fabCartBadge">0</span>
+    <span class="fab-cart__total" id="fabCartTotal">R$ 0,00</span>
+  </button>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <p id="footerText">© 2024 Casa José Silva - Todos os direitos reservados</p>
+    <div class="footer__social">
+      <a href="https://wa.me/5511916835853" target="_blank" rel="noopener noreferrer"><i class="fab fa-whatsapp"></i></a>
+      <a href="https://instagram.com/emporiocasajosessilva" target="_blank" rel="noopener noreferrer"><i class="fab fa-instagram"></i></a>
+    </div>
+  </footer>
+</section>
+
+<!-- ==================== CART SIDEBAR ==================== -->
+<div class="overlay hidden" id="cartOverlay"></div>
+<aside class="cart hidden" id="cartSidebar">
+  <div class="cart__header">
+    <h2><i class="fas fa-shopping-bag"></i> Seu Pedido</h2>
+    <button class="cart__close" id="btnCloseCart"><i class="fas fa-times"></i></button>
+  </div>
+  <div class="cart__scroll" id="cartScroll">
+  <div class="cart__body" id="cartItems">
+    <div class="cart__empty"><i class="fas fa-shopping-basket"></i><p>Seu carrinho está vazio</p></div>
+  </div>
+  <div class="cart__obs">
+    <label for="obsInput"><i class="fas fa-comment-dots"></i> Observações</label>
+    <textarea id="obsInput" placeholder="Ex: sem cebola, borda recheada..." rows="2"></textarea>
+  </div>
+  <div class="cart__delivery">
+    <label><i class="fas fa-motorcycle"></i> Forma de entrega</label>
+    <div class="cart__delivery-opts">
+      <button class="delivery-opt active" data-tipo="delivery"><i class="fas fa-motorcycle"></i> Delivery</button>
+      <button class="delivery-opt" data-tipo="retirada"><i class="fas fa-store"></i> Retirada</button>
+    </div>
+    <div class="cart__address" id="addressSection">
+      <div class="cart__address-row">
+        <div class="addr-field">
+          <label for="addrStreet">Rua</label>
+          <input type="text" id="addrStreet" placeholder="Nome da rua">
+        </div>
+        <div class="addr-field addr-field--small">
+          <label for="addrNumber">Nº</label>
+          <input type="text" id="addrNumber" placeholder="123">
+        </div>
+      </div>
+      <div class="cart__address-row">
+        <div class="addr-field">
+          <label for="addrComp">Complemento</label>
+          <input type="text" id="addrComp" placeholder="Apto, bloco... (opcional)">
+        </div>
+      </div>
+      <div class="cart__address-row">
+        <div class="addr-field">
+          <label for="addrBairro">Bairro</label>
+          <input type="text" id="addrBairro" placeholder="Bairro">
+        </div>
+      </div>
+      <label class="addr-save">
+        <input type="checkbox" id="addrSave" checked>
+        <span>Salvar endereço para próximos pedidos</span>
+      </label>
+    </div>
+  </div>
+  </div>
+  <div class="cart__footer">
+    <div class="cart__summary">
+      <div class="cart__line"><span>Subtotal</span><span id="cartSubtotal">R$ 0,00</span></div>
+      <div class="cart__line" id="deliveryLine"><span>Entrega</span><span id="cartDelivery">R$ 5,00</span></div>
+      <div class="cart__total"><span>Total</span><span id="cartTotal">R$ 0,00</span></div>
+    </div>
+    <button class="btn btn--primary btn--lg btn--full" id="btnCheckout" disabled>
+      <i class="fas fa-lock"></i> Finalizar Pedido
+    </button>
+  </div>
+</aside>
+
+<!-- ==================== ORDERS PAGE ==================== -->
+<section class="orders-page hidden" id="ordersPage">
+  <header class="topbar">
+    <button class="topbar__btn" id="btnBackToHome2"><i class="fas fa-arrow-left"></i></button>
+    <div class="topbar__brand"><span class="topbar__name">Meus Pedidos</span></div>
+    <div class="topbar__right"></div>
+  </header>
+  <div class="orders-container" id="ordersList">
+    <div class="orders__empty"><i class="fas fa-inbox"></i><p>Nenhum pedido encontrado.</p></div>
+  </div>
+</section>
+
+<!-- ==================== MODALS ==================== -->
+
+<!-- Hours Modal -->
+<div class="modal-overlay hidden" id="hoursModal">
+  <div class="modal">
+    <div class="modal__header">
+      <h2><i class="fas fa-clock"></i> Horários</h2>
+      <button class="modal__close" data-close="hoursModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body" id="hoursBody">
+      <div class="hours-grid">
+        <div class="hours-row" data-day="0"><span class="hours-day">Domingo</span><span class="hours-time">18:00 – 22:00</span></div>
+        <div class="hours-row" data-day="1"><span class="hours-day">Segunda-feira</span><span class="hours-time">11:00 – 15:00</span></div>
+        <div class="hours-row" data-day="2"><span class="hours-day">Terça-feira</span><span class="hours-time">11:00 – 15:00 / 18:00 – 22:00</span></div>
+        <div class="hours-row" data-day="3"><span class="hours-day">Quarta-feira</span><span class="hours-time">11:00 – 15:00 / 18:00 – 22:00</span></div>
+        <div class="hours-row" data-day="4"><span class="hours-day">Quinta-feira</span><span class="hours-time">11:00 – 15:00 / 18:00 – 22:00</span></div>
+        <div class="hours-row" data-day="5"><span class="hours-day">Sexta-feira</span><span class="hours-time">11:00 – 15:00 / 18:00 – 23:30</span></div>
+        <div class="hours-row" data-day="6"><span class="hours-day">Sábado</span><span class="hours-time">11:00 – 15:00 / 18:00 – 23:30</span></div>
+      </div>
+      <div class="hours-note"><i class="fas fa-info-circle"></i> Inclusive nos feriados · Entrega em toda a região</div>
+    </div>
+  </div>
+</div>
+
+<!-- Location Modal -->
+<div class="modal-overlay hidden" id="locationModal">
+  <div class="modal">
+    <div class="modal__header">
+      <h2><i class="fas fa-map-marker-alt"></i> Localização</h2>
+      <button class="modal__close" data-close="locationModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <iframe class="modal__map" src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3654.4789234567890!2d-46.53!3d-23.69!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x0%3A0x0!2zMjPCsDQxJzI0LjAiUyA0NsKwMzEnNDguMCJX!5e0!3m2!1spt-BR!2sbr!4v1234567890" style="border:0;" allowfullscreen loading="lazy"></iframe>
+      <div class="modal__address-info">
+        <p><strong>📍 Endereço:</strong></p>
+        <p>Rua Banda, 733 – Jardim do Mar<br>São Bernardo do Campo – SP</p>
+      </div>
+      <a href="https://www.google.com/maps/search/?api=1&query=Rua+Banda%2C+733%2C+Jardim+do+Mar%2C+S%C3%A3o+Bernardo+do+Campo%2C+SP" target="_blank" rel="noopener noreferrer" class="btn btn--primary btn--full">
+        <i class="fas fa-directions"></i> Abrir no Google Maps
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- Contact Modal -->
+<div class="modal-overlay hidden" id="contactModal">
+  <div class="modal">
+    <div class="modal__header">
+      <h2><i class="fas fa-phone"></i> Contato</h2>
+      <button class="modal__close" data-close="contactModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <div class="contact-list">
+        <a href="https://wa.me/5511916835853" target="_blank" rel="noopener noreferrer" class="contact-item">
+          <i class="fab fa-whatsapp"></i>
+          <div><strong>WhatsApp</strong><span>(11) 91683-5853</span></div>
+        </a>
+        <a href="mailto:contato@emporiocasajosessilva.com.br" class="contact-item">
+          <i class="fas fa-envelope"></i>
+          <div><strong>E-mail</strong><span>contato@emporiocasajosessilva.com.br</span></div>
+        </a>
+        <a href="https://instagram.com/emporiocasajosessilva" target="_blank" rel="noopener noreferrer" class="contact-item">
+          <i class="fab fa-instagram"></i>
+          <div><strong>Instagram</strong><span>@emporiocasajosessilva</span></div>
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Login Modal -->
+<div class="modal-overlay hidden" id="loginModal">
+  <div class="modal modal--auth">
+    <div class="modal__header">
+      <h2 id="authModalTitle">Entrar</h2>
+      <button class="modal__close" data-close="loginModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-tab="login">Login</button>
+        <button class="auth-tab" data-tab="cadastro">Criar Conta</button>
+      </div>
+      <form id="loginForm" class="auth-form active">
+        <div class="form-group">
+          <label for="loginEmail">E-mail</label>
+          <input type="email" id="loginEmail" placeholder="seu@email.com" required>
+        </div>
+        <div class="form-group">
+          <label for="loginPassword">Senha</label>
+          <input type="password" id="loginPassword" placeholder="Sua senha" required>
+        </div>
+        <button type="submit" class="btn btn--primary btn--full"><i class="fas fa-sign-in-alt"></i> Entrar</button>
+      </form>
+      <form id="cadastroForm" class="auth-form">
+        <div class="form-group">
+          <label for="cadastroName">Nome Completo</label>
+          <input type="text" id="cadastroName" placeholder="Seu nome" required>
+        </div>
+        <div class="form-group">
+          <label for="cadastroPhone">Telefone</label>
+          <input type="tel" id="cadastroPhone" placeholder="(00) 00000-0000" required>
+        </div>
+        <div class="form-group">
+          <label for="cadastroEmail">E-mail</label>
+          <input type="email" id="cadastroEmail" placeholder="seu@email.com" required>
+        </div>
+        <div class="form-group">
+          <label for="cadastroPassword">Senha</label>
+          <input type="password" id="cadastroPassword" placeholder="Mínimo 6 caracteres" required>
+        </div>
+        <div class="form-group">
+          <label for="cadastroPasswordConfirm">Confirmar Senha</label>
+          <input type="password" id="cadastroPasswordConfirm" placeholder="Repita a senha" required>
+        </div>
+        <button type="submit" class="btn btn--primary btn--full"><i class="fas fa-user-plus"></i> Criar Conta</button>
+      </form>
+      <div class="auth-divider"><span>ou</span></div>
+      <button class="btn btn--google" id="btnGoogleLogin">
+        <svg width="18" height="18" viewBox="0 0 18 18"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" fill="#4285F4"/><path d="M9.003 18c2.43 0 4.467-.806 5.956-2.184l-2.909-2.258c-.806.54-1.837.86-3.047.86-2.344 0-4.328-1.584-5.036-3.711H.96v2.332C2.44 15.983 5.485 18 9.003 18z" fill="#34A853"/><path d="M3.964 10.712c-.18-.54-.282-1.117-.282-1.71 0-.593.102-1.17.282-1.71V4.96H.957C.347 6.175 0 7.55 0 9.002c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/><path d="M9.003 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.464.891 11.426 0 9.003 0 5.485 0 2.44 2.017.96 4.958L3.967 7.29c.708-2.127 2.692-3.71 5.036-3.71z" fill="#EA4335"/></svg>
+        Continuar com Google
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Product Detail Modal -->
+<div class="modal-overlay hidden" id="productModal">
+  <div class="modal modal--product">
+    <div class="modal__header">
+      <h2 id="productModalTitle">Produto</h2>
+      <button class="modal__close" data-close="productModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body" id="productModalBody"></div>
+  </div>
+</div>
+
+<!-- ==================== ADMIN PANEL PAGE ==================== -->
+<section class="admin-page hidden" id="adminPage">
+  <header class="topbar">
+    <button class="topbar__btn" id="btnBackFromAdmin"><i class="fas fa-arrow-left"></i></button>
+    <div class="topbar__brand"><span class="topbar__name">Painel Admin</span></div>
+    <div class="topbar__right">
+      <span class="topbar__date" id="adminDate" style="font-size:.75rem;color:var(--text-muted);"></span>
+    </div>
+  </header>
+  <!-- Admin nav tabs -->
+  <nav class="admin-tabs" id="adminTabs">
+    <button class="admin-tab active" data-apage="dashboard"><i class="fas fa-chart-line"></i> Dashboard</button>
+    <button class="admin-tab" data-apage="pedidos"><i class="fas fa-receipt"></i> Pedidos</button>
+    <button class="admin-tab" data-apage="cardapio"><i class="fas fa-pizza-slice"></i> Cardápio</button>
+    <button class="admin-tab" data-apage="clientes"><i class="fas fa-users"></i> Clientes</button>
+    <button class="admin-tab" data-apage="config"><i class="fas fa-cog"></i> Config</button>
+  </nav>
+
+  <!-- ====== DASHBOARD ====== -->
+  <div class="apage active" id="apDashboard">
+    <div class="admin-kpis">
+      <div class="admin-kpi"><div class="admin-kpi__icon" style="background:rgba(76,175,80,.1);color:#4CAF50;"><i class="fas fa-dollar-sign"></i></div><div class="admin-kpi__info"><span class="admin-kpi__label">Faturamento Hoje</span><span class="admin-kpi__value" id="akpiRevenueToday">R$ 0,00</span></div></div>
+      <div class="admin-kpi"><div class="admin-kpi__icon" style="background:rgba(33,150,243,.1);color:#2196F3;"><i class="fas fa-shopping-cart"></i></div><div class="admin-kpi__info"><span class="admin-kpi__label">Pedidos Hoje</span><span class="admin-kpi__value" id="akpiOrdersToday">0</span></div></div>
+      <div class="admin-kpi"><div class="admin-kpi__icon" style="background:rgba(255,152,0,.1);color:#FF9800;"><i class="fas fa-receipt"></i></div><div class="admin-kpi__info"><span class="admin-kpi__label">Ticket Médio</span><span class="admin-kpi__value" id="akpiAvgTicket">R$ 0,00</span></div></div>
+      <div class="admin-kpi"><div class="admin-kpi__icon" style="background:rgba(156,39,176,.1);color:#9C27B0;"><i class="fas fa-calendar-alt"></i></div><div class="admin-kpi__info"><span class="admin-kpi__label">Faturamento Mês</span><span class="admin-kpi__value" id="akpiRevenueMonth">R$ 0,00</span></div></div>
+    </div>
+    <div class="admin-charts-row">
+      <div class="admin-chart-card"><h3>Faturamento - Últimos 7 dias</h3><canvas id="aChartRevenue"></canvas></div>
+      <div class="admin-chart-card"><h3>Pedidos por Status</h3><canvas id="aChartStatus"></canvas></div>
+    </div>
+    <div class="admin-card"><div class="admin-card__header"><h3>Pedidos Recentes</h3></div><div class="admin-card__body"><table class="admin-table"><thead><tr><th>#</th><th>Cliente</th><th>Total</th><th>Status</th><th>Data</th></tr></thead><tbody id="aRecentOrdersBody"></tbody></table></div></div>
+  </div>
+
+  <!-- ====== PEDIDOS ====== -->
+  <div class="apage" id="apPedidos">
+    <div class="admin-toolbar">
+      <div class="admin-filter-group">
+        <select id="aFilterStatus"><option value="">Todos os Status</option><option value="pendente">Pendente</option><option value="confirmado">Confirmado</option><option value="preparando">Preparando</option><option value="saiu_entrega">Saiu p/ Entrega</option><option value="entregue">Entregue</option><option value="cancelado">Cancelado</option></select>
+        <input type="date" id="aFilterDate">
+      </div>
+      <button class="btn btn--primary" id="aBtnRefreshOrders" style="border-radius:var(--radius-sm);padding:8px 16px;font-size:.82rem;"><i class="fas fa-sync-alt"></i> Atualizar</button>
+    </div>
+    <div class="admin-card"><div class="admin-card__body"><table class="admin-table"><thead><tr><th>#</th><th>Cliente</th><th>Itens</th><th>Total</th><th>Entrega</th><th>Status</th><th>Data</th><th>Ações</th></tr></thead><tbody id="aOrdersTableBody"></tbody></table><div class="admin-empty hidden" id="aOrdersEmpty"><i class="fas fa-inbox"></i><p>Nenhum pedido encontrado</p></div></div></div>
+  </div>
+
+  <!-- ====== CARDÁPIO ====== -->
+  <div class="apage" id="apCardapio">
+    <div class="admin-toolbar">
+      <button class="btn btn--primary" id="aBtnAddProduct" style="border-radius:var(--radius-sm);padding:8px 16px;font-size:.82rem;"><i class="fas fa-plus"></i> Novo Produto</button>
+      <div class="admin-filter-group">
+        <select id="aFilterCategory"><option value="">Todas Categorias</option></select>
+        <input type="text" id="aFilterProduct" placeholder="Buscar produto...">
+      </div>
+    </div>
+    <div class="admin-card"><div class="admin-card__body"><table class="admin-table"><thead><tr><th>Img</th><th>Nome</th><th>Categoria</th><th>Preço</th><th>Destaque</th><th>Disponível</th><th>Ações</th></tr></thead><tbody id="aProductsTableBody"></tbody></table></div></div>
+  </div>
+
+  <!-- ====== CLIENTES ====== -->
+  <div class="apage" id="apClientes">
+    <div class="admin-card"><div class="admin-card__header"><h3>Clientes</h3></div><div class="admin-card__body"><table class="admin-table"><thead><tr><th>Nome</th><th>Email</th><th>Telefone</th><th>Pedidos</th><th>Total Gasto</th></tr></thead><tbody id="aClientsTableBody"></tbody></table></div></div>
+  </div>
+
+  <!-- ====== CONFIG ====== -->
+  <div class="apage" id="apConfig">
+    <div class="admin-config-grid" id="aConfigGrid"></div>
+    <div style="margin-top:20px;display:flex;justify-content:flex-end;gap:10px;">
+      <button class="btn btn--outline" id="aBtnResetVisual" style="border-radius:var(--radius-sm);padding:10px 20px;font-size:.85rem;color:#D32F2F;border-color:#D32F2F;"><i class="fas fa-undo"></i> Resetar Visual</button>
+      <button class="btn btn--primary" id="aBtnSaveConfig" style="border-radius:var(--radius-sm);padding:10px 20px;font-size:.85rem;"><i class="fas fa-save"></i> Salvar Configurações</button>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== ADMIN: PRODUCT FORM MODAL ==================== -->
+<div class="modal-overlay hidden" id="aProductFormModal">
+  <div class="modal">
+    <div class="modal__header">
+      <h2 id="aProductFormTitle">Novo Produto</h2>
+      <button class="modal__close" data-close="aProductFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <form id="aProductForm">
+        <input type="hidden" id="aProductId">
+        <div class="admin-form-row">
+          <div class="admin-form-group"><label for="aProductNome">Nome</label><input type="text" id="aProductNome" required></div>
+          <div class="admin-form-group"><label for="aProductCategoria">Categoria</label><input type="text" id="aProductCategoria" list="aCategoryList" required><datalist id="aCategoryList"></datalist></div>
+        </div>
+        <div class="admin-form-group"><label for="aProductDescricao">Descrição</label><textarea id="aProductDescricao" rows="3"></textarea></div>
+        <div class="admin-form-row">
+          <div class="admin-form-group"><label for="aProductPreco">Preço (R$)</label><input type="number" id="aProductPreco" step="0.01" min="0" required></div>
+          <div class="admin-form-group"><label for="aProductOrdem">Ordem</label><input type="number" id="aProductOrdem" value="0"></div>
+        </div>
+        <div class="admin-form-group">
+          <label>Imagem do Produto</label>
+          <div class="drop-zone" id="aProductDropZone">
+            <input type="file" id="aProductFileInput" accept="image/*" class="drop-zone__input">
+            <div class="drop-zone__prompt" id="aProductDropPrompt">
+              <i class="fas fa-cloud-upload-alt"></i>
+              <span>Arraste uma imagem aqui ou clique para selecionar</span>
+            </div>
+            <div class="drop-zone__preview hidden" id="aProductDropPreview">
+              <img id="aProductPreviewImg" alt="Preview">
+              <button type="button" class="drop-zone__remove" id="aProductRemoveImg"><i class="fas fa-times"></i></button>
+            </div>
+          </div>
+          <input type="hidden" id="aProductImagem">
+        </div>
+        <div class="admin-form-row" style="align-items:center;">
+          <label class="admin-switch-label"><input type="checkbox" id="aProductDisponivel" checked><span class="admin-switch"></span> Disponível</label>
+          <label class="admin-switch-label"><input type="checkbox" id="aProductDestaque"><span class="admin-switch"></span> Destaque</label>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid rgba(0,0,0,.08);">
+          <button type="button" class="btn btn--outline" data-close="aProductFormModal" style="border-radius:var(--radius-sm);padding:8px 16px;font-size:.82rem;">Cancelar</button>
+          <button type="submit" class="btn btn--primary" id="aBtnSaveProduct" style="border-radius:var(--radius-sm);padding:8px 16px;font-size:.82rem;">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ADMIN: ORDER DETAIL MODAL ==================== -->
+<div class="modal-overlay hidden" id="aOrderDetailModal">
+  <div class="modal">
+    <div class="modal__header">
+      <h2>Detalhes do Pedido</h2>
+      <button class="modal__close" data-close="aOrderDetailModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body" id="aOrderDetailBody"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast hidden" id="toast"></div>
+
+<!-- Success payment overlay -->
+<div class="success-overlay hidden" id="successOverlay">
+  <div class="success-overlay__content">
+    <div class="success-overlay__icon"><i class="fas fa-check-circle"></i></div>
+    <h2>Pedido Criado!</h2>
+    <p>Seu pedido foi enviado com sucesso.<br>Acompanhe em "Meus Pedidos".</p>
+    <button class="btn btn--primary" id="btnSuccessClose">Entendi</button>
+  </div>
+</div>
+
+<script src="main.js" defer></script>
+</body>
+</html>
