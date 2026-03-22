@@ -28,6 +28,8 @@ let deliveryMapCircles = [];
 let deliveryMapMarker = null;
 let orderAgeTimer = null;
 let tableOrderDraftItems = [];
+let promotionProductsCatalog = [];
+let selectedPromotionProductIds = [];
 const ORDER_ACTED_STORAGE_KEY = 'cjs_admin_orders_acted_v1';
 let actedOrderIds = loadActedOrderIds();
 
@@ -1649,6 +1651,14 @@ function resetPromotionForm() {
   $('promotionButtonText').value = 'Ver Produto';
   $('promotionAtiva').checked = true;
   $('promotionHighlight').checked = false;
+  $('promotionImageUrl').value = '';
+  $('promotionImagePreview').src = '';
+  $('promotionImagePreviewWrap').classList.add('hidden');
+  $('promotionImageHint').textContent = 'JPG/PNG/WebP · até 8MB';
+  $('promotionImageDropzone').classList.remove('dragover');
+  $('promotionImageFile').value = '';
+  selectedPromotionProductIds = [];
+  renderPromotionProductsSummary();
   setSelectedPromotionDays([]);
   $('btnDeletePromotion').style.display = 'none';
 }
@@ -1661,8 +1671,25 @@ function fillPromotionForm(promo) {
   $('promotionDescricao').value = promo.description || '';
   $('promotionRules').value = promo.rules || '';
   $('promotionCoupon').value = promo.coupon_code || '';
-  $('promotionImage').value = promo.image_url || '';
-  $('promotionProductId').value = promo.product_id || '';
+  $('promotionImageUrl').value = promo.image_url || '';
+  if (promo.image_url) {
+    $('promotionImagePreview').src = promo.image_url;
+    $('promotionImagePreviewWrap').classList.remove('hidden');
+    $('promotionImageHint').textContent = 'Imagem pronta para a campanha';
+  } else {
+    $('promotionImagePreview').src = '';
+    $('promotionImagePreviewWrap').classList.add('hidden');
+    $('promotionImageHint').textContent = 'JPG/PNG/WebP · até 8MB';
+  }
+  const multi = Array.isArray(promo.product_ids) ? promo.product_ids : [];
+  if (multi.length) {
+    selectedPromotionProductIds = multi.map(v => Number(v)).filter(v => Number.isFinite(v));
+  } else if (promo.product_id) {
+    selectedPromotionProductIds = [Number(promo.product_id)];
+  } else {
+    selectedPromotionProductIds = [];
+  }
+  renderPromotionProductsSummary();
   $('promotionButtonText').value = promo.button_text || 'Ver Produto';
   $('promotionDiscount').value = promo.discount_percent ?? '';
   $('promotionOriginalPrice').value = promo.original_price ?? '';
@@ -1677,6 +1704,171 @@ function fillPromotionForm(promo) {
   $('promotionHighlight').checked = promo.highlight_style === true;
   setSelectedPromotionDays(promo.days_of_week || []);
   $('btnDeletePromotion').style.display = 'inline-flex';
+}
+
+function renderPromotionProductsSummary() {
+  const box = $('promotionProductSelectionSummary');
+  if (!box) return;
+  if (!selectedPromotionProductIds.length) {
+    box.textContent = 'Nenhum item selecionado';
+    return;
+  }
+
+  const picked = selectedPromotionProductIds
+    .map(id => promotionProductsCatalog.find(p => Number(p.id) === Number(id)))
+    .filter(Boolean);
+
+  if (!picked.length) {
+    box.textContent = `${selectedPromotionProductIds.length} item(ns) selecionado(s)`;
+    return;
+  }
+
+  const labels = picked.slice(0, 3).map(p => p.nome).join(' · ');
+  const extra = picked.length > 3 ? ` +${picked.length - 3}` : '';
+  box.textContent = `${labels}${extra}`;
+}
+
+async function ensurePromotionProductsCatalog() {
+  if (promotionProductsCatalog.length) return;
+  const { data, error } = await sb
+    .from('produtos')
+    .select('id,nome,preco,categoria,imagem_url,disponivel')
+    .order('nome');
+  if (error) throw error;
+  promotionProductsCatalog = data || [];
+}
+
+function renderPromotionProductsGrid(searchTerm = '') {
+  const grid = $('promotionProductsGrid');
+  if (!grid) return;
+  const query = (searchTerm || '').trim().toLowerCase();
+  const filtered = promotionProductsCatalog.filter(item => {
+    if (!query) return true;
+    return String(item.nome || '').toLowerCase().includes(query)
+      || String(item.categoria || '').toLowerCase().includes(query);
+  });
+
+  if (!filtered.length) {
+    grid.innerHTML = '<div class="empty-state" style="padding:20px;"><i class="fas fa-search"></i><p>Nenhum produto encontrado</p></div>';
+    return;
+  }
+
+  grid.innerHTML = filtered.map(item => {
+    const selected = selectedPromotionProductIds.includes(Number(item.id));
+    return `
+      <label class="promotion-product-item ${selected ? 'is-selected' : ''}">
+        <input type="checkbox" class="promotion-product-check" value="${item.id}" ${selected ? 'checked' : ''} style="margin-top:0;">
+        ${item.imagem_url ? `<img class="promotion-product-item__thumb" src="${escapeHtml(item.imagem_url)}" alt="">` : '<div class="promotion-product-item__thumb"></div>'}
+        <div>
+          <div class="promotion-product-item__name">${escapeHtml(item.nome || 'Produto')}</div>
+          <div class="promotion-product-item__meta">${formatMoney(item.preco || 0)} · ${escapeHtml(formatCategory(item.categoria || ''))}</div>
+        </div>
+      </label>
+    `;
+  }).join('');
+
+  grid.querySelectorAll('.promotion-product-check').forEach(input => {
+    input.addEventListener('change', () => {
+      const id = Number(input.value);
+      if (input.checked) {
+        if (!selectedPromotionProductIds.includes(id)) selectedPromotionProductIds.push(id);
+      } else {
+        selectedPromotionProductIds = selectedPromotionProductIds.filter(v => v !== id);
+      }
+      renderPromotionProductsGrid($('promotionProductsSearch')?.value || '');
+      renderPromotionProductsSummary();
+    });
+  });
+}
+
+async function openPromotionProductsModal() {
+  try {
+    await ensurePromotionProductsCatalog();
+    $('promotionProductsSearch').value = '';
+    renderPromotionProductsGrid('');
+    $('promotionProductsModal').classList.remove('hidden');
+  } catch (err) {
+    showToast('Erro ao carregar produtos para promoção', 'error');
+  }
+}
+
+function sanitizeFileName(name) {
+  return String(name || 'image')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '-')
+    .replace(/-+/g, '-');
+}
+
+async function uploadPromotionImage(file) {
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    showToast('Selecione um arquivo de imagem válido', 'error');
+    return;
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    showToast('Imagem muito grande (máximo 8MB)', 'error');
+    return;
+  }
+
+  try {
+    promotionImageUploading = true;
+    $('promotionImageHint').textContent = 'Enviando imagem...';
+    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+    const safeName = sanitizeFileName(file.name.replace(/\.[^.]+$/, ''));
+    const filePath = `promotions/${Date.now()}-${safeName}.${ext}`;
+    const { error: upError } = await sb.storage
+      .from(PROMOTION_IMAGE_BUCKET)
+      .upload(filePath, file, { cacheControl: '3600', upsert: false });
+    if (upError) throw upError;
+
+    const { data: publicData } = sb.storage.from(PROMOTION_IMAGE_BUCKET).getPublicUrl(filePath);
+    const publicUrl = publicData?.publicUrl;
+    if (!publicUrl) throw new Error('Não foi possível obter URL pública da imagem');
+
+    $('promotionImageUrl').value = publicUrl;
+    $('promotionImagePreview').src = publicUrl;
+    $('promotionImagePreviewWrap').classList.remove('hidden');
+    $('promotionImageHint').textContent = 'Imagem carregada com sucesso!';
+    showToast('Imagem enviada com sucesso', 'success');
+  } catch (err) {
+    $('promotionImageHint').textContent = 'Erro no upload. Tente novamente.';
+    showToast('Erro ao enviar imagem: ' + (err.message || 'erro desconhecido'), 'error');
+  } finally {
+    promotionImageUploading = false;
+    $('promotionImageFile').value = '';
+  }
+}
+
+function bindPromotionImageUpload() {
+  const dropzone = $('promotionImageDropzone');
+  const input = $('promotionImageFile');
+  if (!dropzone || !input || dropzone.dataset.bound === '1') return;
+
+  dropzone.addEventListener('click', () => input.click());
+  input.addEventListener('change', async () => {
+    if (input.files?.[0]) await uploadPromotionImage(input.files[0]);
+  });
+
+  dropzone.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    dropzone.classList.add('dragover');
+  });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+  dropzone.addEventListener('drop', async (event) => {
+    event.preventDefault();
+    dropzone.classList.remove('dragover');
+    const file = event.dataTransfer?.files?.[0];
+    if (file) await uploadPromotionImage(file);
+  });
+
+  $('btnRemovePromotionImage')?.addEventListener('click', () => {
+    $('promotionImageUrl').value = '';
+    $('promotionImagePreview').src = '';
+    $('promotionImagePreviewWrap').classList.add('hidden');
+    $('promotionImageHint').textContent = 'JPG/PNG/WebP · até 8MB';
+  });
+
+  dropzone.dataset.bound = '1';
 }
 
 async function syncPromotionCoupon(promotionId, promoName, couponCode, discountPercent, dateStart, dateEnd, isActive) {
@@ -1810,18 +2002,24 @@ $('promotionForm')?.addEventListener('submit', async (event) => {
     return;
   }
 
+  if (promotionImageUploading) {
+    showToast('Aguarde o envio da imagem terminar', 'info');
+    return;
+  }
+
   const payload = {
     name,
     promo_type: promoType,
     title,
     description,
     rules: $('promotionRules').value.trim() || null,
-    image_url: $('promotionImage').value.trim() || null,
+    image_url: $('promotionImageUrl').value.trim() || null,
     coupon_code: couponCode || null,
     discount_percent: discountPercent,
     original_price: $('promotionOriginalPrice').value ? Number($('promotionOriginalPrice').value) : null,
     promo_price: $('promotionPromoPrice').value ? Number($('promotionPromoPrice').value) : null,
-    product_id: $('promotionProductId').value ? Number($('promotionProductId').value) : null,
+    product_id: selectedPromotionProductIds.length ? Number(selectedPromotionProductIds[0]) : null,
+    product_ids: selectedPromotionProductIds,
     button_text: $('promotionButtonText').value.trim() || 'Ver Produto',
     start_date: dateStart,
     end_date: dateEnd,
@@ -1859,7 +2057,18 @@ $('promotionForm')?.addEventListener('submit', async (event) => {
   }
 });
 
+bindPromotionImageUpload();
 resetPromotionForm();
+
+$('btnOpenPromotionProductsModal')?.addEventListener('click', openPromotionProductsModal);
+$('btnApplyPromotionProducts')?.addEventListener('click', () => {
+  renderPromotionProductsSummary();
+  $('promotionProductsModal').classList.add('hidden');
+});
+
+$('promotionProductsSearch')?.addEventListener('input', (event) => {
+  renderPromotionProductsGrid(event.target.value || '');
+});
 
 // ============================================================
 //  CONFIG
@@ -1934,11 +2143,13 @@ const configSections = {
     desc: 'Horários de funcionamento por dia da semana',
     keys: [
       'sales_open_days',
+      'lunch_open_days',
       'lunch_start',
       'lunch_end',
       'lunch_categories',
       'closed_between_start',
       'closed_between_end',
+      'dinner_open_days',
       'dinner_start',
       'dinner_end',
       'dinner_categories',
@@ -1953,35 +2164,24 @@ const configSections = {
       'holiday_closed',
       'holiday_schedule'
     ]
-  },
-  promocoes: {
-    icon: 'fa-tag',
-    title: 'Promoções',
-    desc: 'Descontos, cupons e ofertas especiais',
-    keys: [
-      'enable_promotions',
-      'current_promotion',
-      'promotion_discount',
-      'promotion_expires_at',
-      'coupon_code',
-      'coupon_discount',
-      'loyalty_program_enabled',
-      'birthday_discount'
-    ]
   }
 };
 
 let configOriginal = {};
 let currentSection = 'geral';
 let scheduleCategoryOptions = ['menu', 'pizzas-tradicionais', 'pizzas-especiais', 'pizzas-doces'];
+const PROMOTION_IMAGE_BUCKET = 'images';
+let promotionImageUploading = false;
 
 const configDefaults = {
   sales_open_days: '0,2,3,4,5,6',
+  lunch_open_days: '0,2,3,4,5,6',
   lunch_start: '11:00',
   lunch_end: '15:00',
   lunch_categories: 'menu',
   closed_between_start: '15:00',
   closed_between_end: '18:00',
+  dinner_open_days: '0,2,3,4,5,6',
   dinner_start: '18:00',
   dinner_end: '22:00',
   dinner_categories: 'pizzas-tradicionais,pizzas-especiais,pizzas-doces',
@@ -2026,6 +2226,8 @@ async function loadScheduleCategories() {
 
 function renderScheduleConfigSection(form) {
   const selectedOpenDays = new Set(parseConfigCsvList(getConfigValue('sales_open_days')));
+  const selectedLunchDays = new Set(parseConfigCsvList(getConfigValue('lunch_open_days')));
+  const selectedDinnerDays = new Set(parseConfigCsvList(getConfigValue('dinner_open_days')));
   const selectedLunchCategories = new Set(parseConfigCsvList(getConfigValue('lunch_categories')));
   const selectedDinnerCategories = new Set(parseConfigCsvList(getConfigValue('dinner_categories')));
   const days = [
@@ -2057,6 +2259,16 @@ function renderScheduleConfigSection(form) {
 
       <div class="schedule-block">
         <h4><i class="fas fa-sun"></i> Janela de almoço</h4>
+        <label class="schedule-subtitle">Dias com almoço</label>
+        <div class="schedule-days schedule-days--tight" id="scheduleLunchDays">
+          ${days.map(day => `
+            <label class="schedule-check">
+              <input type="checkbox" class="schedule-lunch-day-check" value="${day.v}" ${selectedLunchDays.has(day.v) ? 'checked' : ''}>
+              <span>${day.label.slice(0, 3)}</span>
+            </label>
+          `).join('')}
+        </div>
+        <input type="hidden" id="cfgLunchOpenDays" data-config-key="lunch_open_days" data-config-type="text" value="${escapeHtml(getConfigValue('lunch_open_days'))}">
         <div class="schedule-time-grid">
           <div class="config-field">
             <label>Início</label>
@@ -2095,6 +2307,16 @@ function renderScheduleConfigSection(form) {
 
       <div class="schedule-block">
         <h4><i class="fas fa-moon"></i> Janela de jantar</h4>
+        <label class="schedule-subtitle">Dias com janta</label>
+        <div class="schedule-days schedule-days--tight" id="scheduleDinnerDays">
+          ${days.map(day => `
+            <label class="schedule-check">
+              <input type="checkbox" class="schedule-dinner-day-check" value="${day.v}" ${selectedDinnerDays.has(day.v) ? 'checked' : ''}>
+              <span>${day.label.slice(0, 3)}</span>
+            </label>
+          `).join('')}
+        </div>
+        <input type="hidden" id="cfgDinnerOpenDays" data-config-key="dinner_open_days" data-config-type="text" value="${escapeHtml(getConfigValue('dinner_open_days'))}">
         <div class="schedule-time-grid">
           <div class="config-field">
             <label>Início</label>
@@ -2133,17 +2355,27 @@ function renderScheduleConfigSection(form) {
   const syncLunchCategories = () => {
     $('cfgLunchCategories').value = toCsvFromChecked('.schedule-lunch-category-check');
   };
+  const syncLunchDays = () => {
+    $('cfgLunchOpenDays').value = toCsvFromChecked('.schedule-lunch-day-check');
+  };
   const syncDinnerCategories = () => {
     $('cfgDinnerCategories').value = toCsvFromChecked('.schedule-dinner-category-check');
+  };
+  const syncDinnerDays = () => {
+    $('cfgDinnerOpenDays').value = toCsvFromChecked('.schedule-dinner-day-check');
   };
 
   $$('.schedule-day-check').forEach(input => input.addEventListener('change', syncOpenDays));
   $$('.schedule-lunch-category-check').forEach(input => input.addEventListener('change', syncLunchCategories));
+  $$('.schedule-lunch-day-check').forEach(input => input.addEventListener('change', syncLunchDays));
   $$('.schedule-dinner-category-check').forEach(input => input.addEventListener('change', syncDinnerCategories));
+  $$('.schedule-dinner-day-check').forEach(input => input.addEventListener('change', syncDinnerDays));
 
   syncOpenDays();
   syncLunchCategories();
+  syncLunchDays();
   syncDinnerCategories();
+  syncDinnerDays();
 }
 
 async function loadConfig() {
@@ -2315,11 +2547,13 @@ function renderConfigSection(section) {
       'accent_color': 'Cor de destaque/botões',
       'monday_hours': 'Formato: 09:00 - 23:00 ou "Fechado"',
         'sales_open_days': 'Dias que aceita pedidos. Use: 0=Dom,1=Seg,2=Ter... Ex.: 0,2,3,4,5,6',
+        'lunch_open_days': 'Dias com almoço (0=Dom...6=Sáb). Ex.: 2,3,4,5,6,0',
         'lunch_start': 'Início do almoço (HH:MM), ex.: 11:00',
         'lunch_end': 'Fim do almoço (HH:MM), ex.: 15:00',
         'lunch_categories': 'Categorias liberadas no almoço (separe por vírgula). Ex.: menu',
         'closed_between_start': 'Início do período fechado (HH:MM), ex.: 15:00',
         'closed_between_end': 'Fim do período fechado (HH:MM), ex.: 18:00',
+        'dinner_open_days': 'Dias com jantar (0=Dom...6=Sáb). Ex.: 2,3,4,5,6,0',
         'dinner_start': 'Início do jantar (HH:MM), ex.: 18:00',
         'dinner_end': 'Fim do jantar (HH:MM), ex.: 22:00',
         'dinner_categories': 'Categorias liberadas no jantar. Ex.: pizzas-tradicionais,pizzas-especiais,pizzas-doces',
@@ -2456,11 +2690,13 @@ function formatConfigLabel(key) {
     'holiday_closed': 'Fechado Feriados',
     'holiday_schedule': 'Horário Especial Feriados',
     'sales_open_days': 'Dias Abertos Para Pedido',
+    'lunch_open_days': 'Dias Com Almoço',
     'lunch_start': 'Início Almoço (HH:MM)',
     'lunch_end': 'Fim Almoço (HH:MM)',
     'lunch_categories': 'Categorias Liberadas Almoço',
     'closed_between_start': 'Início Intervalo Fechado',
     'closed_between_end': 'Fim Intervalo Fechado',
+    'dinner_open_days': 'Dias Com Jantar',
     'dinner_start': 'Início Jantar (HH:MM)',
     'dinner_end': 'Fim Jantar (HH:MM)',
     'dinner_categories': 'Categorias Liberadas Jantar',

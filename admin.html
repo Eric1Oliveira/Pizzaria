@@ -413,15 +413,26 @@
                   <input type="text" id="promotionCoupon" placeholder="Ex.: PIZZA20" maxlength="40">
                 </div>
                 <div class="form-group">
-                  <label for="promotionImage">URL da imagem</label>
-                  <input type="url" id="promotionImage" placeholder="https://...">
+                  <label>Imagem da promoção</label>
+                  <div class="promo-upload" id="promotionImageDropzone">
+                    <input type="file" id="promotionImageFile" accept="image/*" hidden>
+                    <div class="promo-upload__icon"><i class="fas fa-cloud-upload-alt"></i></div>
+                    <p><strong>Arraste a imagem aqui</strong> ou clique para escolher do computador</p>
+                    <span id="promotionImageHint">JPG/PNG/WebP · até 8MB</span>
+                  </div>
+                  <div class="promo-upload-preview hidden" id="promotionImagePreviewWrap">
+                    <img id="promotionImagePreview" alt="Prévia da promoção">
+                    <button type="button" class="btn btn--outline-sm btn--sm" id="btnRemovePromotionImage"><i class="fas fa-trash"></i> Remover</button>
+                  </div>
+                  <input type="hidden" id="promotionImageUrl">
                 </div>
               </div>
 
               <div class="form-row">
                 <div class="form-group">
-                  <label for="promotionProductId">ID Produto (botão ir direto)</label>
-                  <input type="number" id="promotionProductId" min="1" step="1" placeholder="Ex.: 12">
+                  <label>Produtos da promoção</label>
+                  <div class="promotion-products-summary" id="promotionProductSelectionSummary">Nenhum item selecionado</div>
+                  <button type="button" class="btn btn--outline-sm" id="btnOpenPromotionProductsModal"><i class="fas fa-box-open"></i> Selecionar produtos / montar kit</button>
                 </div>
                 <div class="form-group">
                   <label for="promotionButtonText">Texto do botão</label>
@@ -727,6 +738,27 @@
           <button type="submit" class="btn btn--primary">Salvar Região</button>
         </div>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PROMOTION PRODUCTS MODAL ==================== -->
+<div class="modal-overlay hidden" id="promotionProductsModal">
+  <div class="modal modal--form">
+    <div class="modal__header">
+      <h2><i class="fas fa-box-open"></i> Selecionar Produtos da Promoção</h2>
+      <button class="modal__close" data-close="promotionProductsModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <div class="form-group">
+        <label for="promotionProductsSearch">Buscar item</label>
+        <input type="text" id="promotionProductsSearch" placeholder="Digite o nome do produto...">
+      </div>
+      <div class="promotion-products-grid" id="promotionProductsGrid"></div>
+      <div class="form-actions" style="margin-top:12px;">
+        <button type="button" class="btn btn--outline-sm" data-close="promotionProductsModal">Fechar</button>
+        <button type="button" class="btn btn--primary" id="btnApplyPromotionProducts"><i class="fas fa-check"></i> Confirmar seleção</button>
+      </div>
     </div>
   </div>
 </div>

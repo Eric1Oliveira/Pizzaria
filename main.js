@@ -52,9 +52,11 @@ const ordersPage = $('ordersPage');
 
 const DEFAULT_SCHEDULE = {
   sales_open_days: '0,2,3,4,5,6',
+  lunch_open_days: '0,2,3,4,5,6',
   lunch_start: '11:00',
   lunch_end: '15:00',
   lunch_categories: 'menu',
+  dinner_open_days: '0,2,3,4,5,6',
   dinner_start: '18:00',
   dinner_end: '22:00',
   dinner_categories: 'pizzas-tradicionais,pizzas-especiais,pizzas-doces',
@@ -82,9 +84,11 @@ async function loadRuntimeConfig() {
         .select('key,value')
         .in('key', [
           'sales_open_days',
+          'lunch_open_days',
           'lunch_start',
           'lunch_end',
           'lunch_categories',
+          'dinner_open_days',
           'dinner_start',
           'dinner_end',
           'dinner_categories',
@@ -127,11 +131,16 @@ function getScheduleContext() {
 
   const lunchCategories = new Set(parseCsvList(cfg('lunch_categories')));
   const dinnerCategories = new Set(parseCsvList(cfg('dinner_categories')));
+  const fallbackOpenDays = parseCsvList(cfg('sales_open_days')).map(v => Number(v)).filter(v => Number.isInteger(v));
+  const lunchDaysRaw = parseCsvList(cfg('lunch_open_days')).map(v => Number(v)).filter(v => Number.isInteger(v));
+  const dinnerDaysRaw = parseCsvList(cfg('dinner_open_days')).map(v => Number(v)).filter(v => Number.isInteger(v));
+  const lunchDays = lunchDaysRaw.length ? lunchDaysRaw : fallbackOpenDays;
+  const dinnerDays = dinnerDaysRaw.length ? dinnerDaysRaw : fallbackOpenDays;
 
   const dayOpen = openDays.includes(day);
   const inBreak = isBetweenMinutes(currentMinutes, breakStart, breakEnd);
-  const inLunch = isBetweenMinutes(currentMinutes, lunchStart, lunchEnd);
-  const inDinner = isBetweenMinutes(currentMinutes, dinnerStart, dinnerEnd);
+  const inLunch = lunchDays.includes(day) && isBetweenMinutes(currentMinutes, lunchStart, lunchEnd);
+  const inDinner = dinnerDays.includes(day) && isBetweenMinutes(currentMinutes, dinnerStart, dinnerEnd);
 
   let activePeriod = null;
   if (dayOpen && !inBreak) {
@@ -146,8 +155,8 @@ function getScheduleContext() {
     dayOpen,
     inBreak,
     activePeriod,
-    lunch: { start: lunchStart, end: lunchEnd, categories: lunchCategories },
-    dinner: { start: dinnerStart, end: dinnerEnd, categories: dinnerCategories }
+    lunch: { start: lunchStart, end: lunchEnd, categories: lunchCategories, days: lunchDays },
+    dinner: { start: dinnerStart, end: dinnerEnd, categories: dinnerCategories, days: dinnerDays }
   };
 }
 
@@ -193,7 +202,20 @@ function showPage(page) {
   window.scrollTo(0, 0);
 }
 
-$('btnFazerPedido').addEventListener('click', () => { showPage(menuPage); loadProducts(); });
+function isMenuPageVisible() {
+  return !menuPage.classList.contains('hidden');
+}
+
+$('btnFazerPedido').addEventListener('click', async () => {
+  if (!currentUser) {
+    openModal('loginModal');
+    showToast('Cadastre-se ou faça login para acessar o cardápio', 'info');
+    return;
+  }
+  showPage(menuPage);
+  await loadProducts();
+  await loadPromotionPopup();
+});
 $('btnMeusPedidos').addEventListener('click', () => {
   if (!currentUser) { openModal('loginModal'); return; }
   showPage(ordersPage); loadOrders();
@@ -215,6 +237,7 @@ function openModal(id) { $(id).classList.remove('hidden'); document.body.style.o
 function closeModal(id) { $(id).classList.add('hidden'); document.body.style.overflow = ''; }
 
 function openPromoPopup() {
+  if (!isMenuPageVisible()) return;
   $('promoPopup').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
   if (activePromotion?.id) {
@@ -277,8 +300,20 @@ $('promoPopupAction').addEventListener('click', async () => {
   if (!products.length) {
     await loadProducts();
   }
-  if (activePromotion.product_id) {
-    openProductDetail(Number(activePromotion.product_id));
+  const selectedIds = Array.isArray(activePromotion.product_ids)
+    ? activePromotion.product_ids.map(v => Number(v)).filter(v => Number.isFinite(v))
+    : [];
+
+  if (selectedIds.length > 1) {
+    selectedIds.forEach(id => addToCart(id, 1));
+    openCart();
+    showToast('Kit promocional adicionado ao carrinho!', 'success');
+    return;
+  }
+
+  const singleId = selectedIds[0] || Number(activePromotion.product_id || 0);
+  if (singleId) {
+    openProductDetail(singleId);
   }
 });
 
@@ -1251,7 +1286,6 @@ async function initAuth() {
     if (currentUser?.id !== prevUser) {
       await checkAdminStatus(currentUser);
       updateAuthUI();
-      await loadPromotionPopup();
     }
   });
 }
@@ -1444,10 +1478,14 @@ function renderPromotionPopup(promo) {
   }
 
   const delay = Math.max(0, Number(promo.delay_seconds || 0)) * 1000;
-  setTimeout(openPromoPopup, delay);
+  setTimeout(() => {
+    if (!isMenuPageVisible()) return;
+    openPromoPopup();
+  }, delay);
 }
 
 async function loadPromotionPopup() {
+  if (!isMenuPageVisible()) return;
   try {
     const { data, error } = await supabaseClient
       .from('promotion_popups')
@@ -1518,6 +1556,5 @@ function showToast(msg, type = '') {
   await initAuth();
   updateCartUI();
   checkPaymentReturn();
-  await loadPromotionPopup();
 })();
 

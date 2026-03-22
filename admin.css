@@ -241,6 +241,112 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   gap: 12px;
 }
 
+.promo-upload {
+  border: 2px dashed rgba(197,165,90,.65);
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, rgba(255,251,239,.85), rgba(255,255,255,.95));
+  padding: 14px;
+  text-align: center;
+  cursor: pointer;
+  transition: all .2s ease;
+}
+
+.promo-upload:hover,
+.promo-upload.dragover {
+  border-color: var(--primary-dark);
+  background: linear-gradient(135deg, rgba(255,247,224,.95), rgba(255,255,255,1));
+  box-shadow: 0 10px 25px rgba(197,165,90,.2);
+}
+
+.promo-upload__icon {
+  font-size: 1.5rem;
+  color: var(--primary-dark);
+  margin-bottom: 4px;
+}
+
+.promo-upload p {
+  font-size: .82rem;
+  color: var(--text-light);
+  margin-bottom: 3px;
+}
+
+.promo-upload span {
+  font-size: .74rem;
+  color: var(--text-muted);
+}
+
+.promo-upload-preview {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.promo-upload-preview img {
+  width: 86px;
+  height: 86px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: #fff;
+}
+
+.promotion-products-summary {
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  padding: 8px 10px;
+  font-size: .8rem;
+  color: var(--text-light);
+  margin-bottom: 8px;
+}
+
+.promotion-products-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.promotion-product-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.promotion-product-item.is-selected {
+  border-color: var(--primary-dark);
+  box-shadow: 0 0 0 1px rgba(197,165,90,.35), 0 8px 16px rgba(197,165,90,.15);
+}
+
+.promotion-product-item__thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #f3f3f3;
+  border: 1px solid var(--border);
+}
+
+.promotion-product-item__name {
+  font-size: .79rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.promotion-product-item__meta {
+  font-size: .72rem;
+  color: var(--text-muted);
+}
+
 .promo-days {
   display: flex;
   flex-wrap: wrap;
@@ -301,6 +407,10 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 8px;
+}
+
+.schedule-days.schedule-days--tight {
+  grid-template-columns: repeat(auto-fit, minmax(98px, 1fr));
 }
 
 .schedule-check {

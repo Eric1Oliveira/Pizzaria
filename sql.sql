@@ -424,6 +424,7 @@ CREATE TABLE IF NOT EXISTS promotion_popups (
   original_price NUMERIC(10,2) CHECK (original_price >= 0),
   promo_price NUMERIC(10,2) CHECK (promo_price >= 0),
   product_id BIGINT REFERENCES produtos(id) ON DELETE SET NULL,
+  product_ids BIGINT[] NOT NULL DEFAULT '{}'::BIGINT[],
   button_text TEXT DEFAULT 'Ver produto',
   start_date DATE,
   end_date DATE,
@@ -439,6 +440,9 @@ CREATE TABLE IF NOT EXISTS promotion_popups (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT promotion_date_range_chk CHECK (end_date IS NULL OR start_date IS NULL OR end_date >= start_date)
 );
+
+ALTER TABLE promotion_popups
+  ADD COLUMN IF NOT EXISTS product_ids BIGINT[] NOT NULL DEFAULT '{}'::BIGINT[];
 
 CREATE INDEX IF NOT EXISTS idx_promotion_popups_active ON promotion_popups (is_active, priority DESC);
 CREATE INDEX IF NOT EXISTS idx_promotion_popups_type ON promotion_popups (promo_type);
@@ -539,11 +543,13 @@ CREATE POLICY "Promotion events admin read"
 
 INSERT INTO site_config (key, value, type, label, section) VALUES
 ('sales_open_days', '0,2,3,4,5,6', 'text', 'Dias Abertos Para Pedido', 'horarios'),
+('lunch_open_days', '0,2,3,4,5,6', 'text', 'Dias Com Almoço', 'horarios'),
 ('lunch_start', '11:00', 'text', 'Início Almoço (HH:MM)', 'horarios'),
 ('lunch_end', '15:00', 'text', 'Fim Almoço (HH:MM)', 'horarios'),
 ('lunch_categories', 'menu', 'text', 'Categorias Liberadas Almoço', 'horarios'),
 ('closed_between_start', '15:00', 'text', 'Início Intervalo Fechado', 'horarios'),
 ('closed_between_end', '18:00', 'text', 'Fim Intervalo Fechado', 'horarios'),
+('dinner_open_days', '0,2,3,4,5,6', 'text', 'Dias Com Jantar', 'horarios'),
 ('dinner_start', '18:00', 'text', 'Início Jantar (HH:MM)', 'horarios'),
 ('dinner_end', '22:00', 'text', 'Fim Jantar (HH:MM)', 'horarios'),
 ('dinner_categories', 'pizzas-tradicionais,pizzas-especiais,pizzas-doces', 'text', 'Categorias Liberadas Jantar', 'horarios'),
