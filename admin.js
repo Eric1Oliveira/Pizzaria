@@ -1,3 +1,33 @@
+// ==================== MÍDIAS PRODUTO ====================
+window.productMidiasState = [];
+function renderProductMidiasPreview() {
+  const wrap = $('productMidiasPreview');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  (window.productMidiasState || []).forEach((m, i) => {
+    const el = document.createElement(m.type === 'video' ? 'video' : 'img');
+    el.className = 'midias-thumb';
+    el.src = m.url;
+    if (m.type === 'video') {
+      el.muted = true; el.playsInline = true; el.controls = true; el.style.maxHeight = '80px';
+    }
+    el.title = m.url;
+    el.style.cursor = 'pointer';
+    el.onclick = () => window.open(m.url, '_blank');
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'midias-thumb-del';
+    del.innerHTML = '<i class="fas fa-trash"></i>';
+    del.onclick = (ev) => { ev.stopPropagation(); window.productMidiasState.splice(i, 1); renderProductMidiasPreview(); };
+    const box = document.createElement('div');
+    box.className = 'midias-thumb-box';
+    box.appendChild(el);
+    box.appendChild(del);
+    wrap.appendChild(box);
+  });
+  // TODO: Drag and drop reordering (opcional)
+}
+window.renderProductMidiasPreview = renderProductMidiasPreview;
 // ============================================================
 //  ADMIN PANEL — Casa José Silva
 // ============================================================
@@ -32,6 +62,7 @@ let promotionProductsCatalog = [];
 let selectedPromotionProductIds = [];
 const ORDER_ACTED_STORAGE_KEY = 'cjs_admin_orders_acted_v1';
 let actedOrderIds = loadActedOrderIds();
+let responsiveTablesObserver = null;
 
 function loadActedOrderIds() {
   try {
@@ -179,8 +210,46 @@ function showAdmin() {
   $('currentDate').textContent = new Date().toLocaleDateString('pt-BR', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
   });
+  startResponsiveTableObserver();
   initDashboardControls();
   loadDashboard();
+}
+
+function hydrateResponsiveTables(root = document) {
+  const tables = root.querySelectorAll('table.table');
+  tables.forEach((table) => {
+    const headers = [...table.querySelectorAll('thead th')].map(th => th.textContent.trim() || 'Info');
+    if (!headers.length) return;
+
+    table.classList.add('table--stack');
+
+    table.querySelectorAll('tbody tr').forEach((row) => {
+      const cells = [...row.children].filter(el => el.tagName === 'TD');
+      cells.forEach((cell, index) => {
+        cell.setAttribute('data-label', headers[index] || 'Info');
+      });
+    });
+  });
+}
+
+function startResponsiveTableObserver() {
+  if (responsiveTablesObserver) return;
+  const panel = $('adminPanel');
+  if (!panel) return;
+
+  let rafId = null;
+  const runHydration = () => {
+    rafId = null;
+    hydrateResponsiveTables(panel);
+  };
+
+  responsiveTablesObserver = new MutationObserver(() => {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(runHydration);
+  });
+
+  responsiveTablesObserver.observe(panel, { childList: true, subtree: true });
+  hydrateResponsiveTables(panel);
 }
 
 // ============================================================
@@ -1255,7 +1324,9 @@ $('btnAddProduct').addEventListener('click', () => {
   $('productForm').reset();
   $('productId').value = '';
   $('productDisponivel').checked = true;
-  $('productDestaque').checked = false;
+  window.productMidiasState = [];
+  renderProductMidiasPreview();
+  $('productMidias').value = '';
   $('productFormModal').classList.remove('hidden');
 });
 
@@ -1292,13 +1363,25 @@ function renderProductsTable() {
   if (search) filtered = filtered.filter(p => p.nome.toLowerCase().includes(search));
 
   const tbody = $('productsTableBody');
-  tbody.innerHTML = filtered.map(p => `
+  tbody.innerHTML = filtered.map(p => {
+    let thumb = '';
+    if (Array.isArray(p.midias) && p.midias.length > 0) {
+      const idx = p.midias_types && p.midias_types[0] === 'video' ? p.midias.findIndex((_, i) => p.midias_types[i] === 'image') : 0;
+      const url = p.midias[idx >= 0 ? idx : 0];
+      if (url && p.midias_types[idx >= 0 ? idx : 0] === 'image') {
+        thumb = `<img class="table__img" src="${escapeHtml(url)}" alt="">`;
+      } else if (url && p.midias_types[idx >= 0 ? idx : 0] === 'video') {
+        thumb = `<video class="table__img" src="${escapeHtml(url)}" alt="" muted playsinline style="object-fit:cover;width:100%;height:100%;"></video>`;
+      }
+    } else {
+      thumb = '<div class="table__img" style="background:#f0f0f0;"></div>';
+    }
+    return `
     <tr>
-      <td>${p.imagem_url ? `<img class="table__img" src="${escapeHtml(p.imagem_url)}" alt="">` : '<div class="table__img" style="background:#f0f0f0;"></div>'}</td>
+      <td>${thumb}</td>
       <td><strong>${escapeHtml(p.nome)}</strong></td>
       <td>${escapeHtml(formatCategory(p.categoria))}</td>
       <td>${formatMoney(p.preco)}</td>
-      <td>${p.destaque ? '<i class="fas fa-star" style="color:#D4AF37;"></i>' : '-'}</td>
       <td>
         <label class="switch-label" style="margin:0;">
           <input type="checkbox" ${p.disponivel ? 'checked' : ''} onchange="toggleAvailability(${p.id}, this.checked)">
@@ -1312,7 +1395,8 @@ function renderProductsTable() {
         </div>
       </td>
     </tr>
-  `).join('');
+    `;
+  }).join('');
 }
 
 window.editProduct = function(id) {
@@ -1325,9 +1409,12 @@ window.editProduct = function(id) {
   $('productDescricao').value = p.descricao || '';
   $('productPreco').value = p.preco;
   $('productOrdem').value = p.ordem || 0;
-  $('productImagem').value = p.imagem_url || '';
   $('productDisponivel').checked = p.disponivel;
-  $('productDestaque').checked = p.destaque || false;
+  // Preencher galeria de mídias (robusto para produtos antigos)
+  const midiasArr = Array.isArray(p.midias) ? p.midias : (p.midias ? [p.midias] : []);
+  const typesArr = Array.isArray(p.midias_types) ? p.midias_types : (p.midias_types ? [p.midias_types] : []);
+  window.productMidiasState = midiasArr.map((url, i) => ({ url, type: typesArr[i] || 'image' }));
+  renderProductMidiasPreview();
   $('productFormModal').classList.remove('hidden');
 };
 
@@ -1356,21 +1443,25 @@ window.toggleAvailability = async function(id, available) {
 
 $('productForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const id = $('productId').value;
+  const idValue = $('productId').value?.trim();
+  const nomeProduto = $('productNome').value.trim();
+  
+  if (!nomeProduto) { showToast('Nome do produto é obrigatório', 'error'); return; }
+  
   const payload = {
-    nome: $('productNome').value.trim(),
+    nome: nomeProduto,
     categoria: $('productCategoria').value.trim(),
     descricao: $('productDescricao').value.trim(),
     preco: parseFloat($('productPreco').value),
     ordem: parseInt($('productOrdem').value) || 0,
-    imagem_url: $('productImagem').value.trim() || null,
     disponivel: $('productDisponivel').checked,
-    destaque: $('productDestaque').checked,
+    midias: (window.productMidiasState || []).map(m => m.url),
+    midias_types: (window.productMidiasState || []).map(m => m.type),
   };
 
   try {
-    if (id) {
-      const { error } = await sb.from('produtos').update(payload).eq('id', parseInt(id));
+    if (idValue && idValue !== '' && !isNaN(idValue)) {
+      const { error } = await sb.from('produtos').update(payload).eq('id', parseInt(idValue));
       if (error) throw error;
       showToast('Produto atualizado!', 'success');
     } else {
@@ -1378,10 +1469,44 @@ $('productForm').addEventListener('submit', async (e) => {
       if (error) throw error;
       showToast('Produto criado!', 'success');
     }
+    window.productMidiasState = [];
     $('productFormModal').classList.add('hidden');
     loadProducts();
   } catch (err) {
     showToast('Erro ao salvar produto: ' + err.message, 'error');
+    console.error('Erro ao salvar:', err);
+  }
+});
+
+// ==================== UPLOAD DE MÍDIAS DO PRODUTO ====================
+$('productMidias')?.addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files || []);
+  for (const file of files) {
+    if (!/^image\//.test(file.type) && !/^video\//.test(file.type)) continue;
+    if (file.size > 8 * 1024 * 1024) { showToast('Arquivo muito grande (máx. 8MB)', 'error'); continue; }
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const safeName = (file.name.replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 32));
+    const filePath = `produtos/${Date.now()}-${safeName}.${ext}`;
+
+    const { data, error } = await sb.storage.from('produtos').upload(filePath, file, { cacheControl: '3600', upsert: false });
+    if (error) { showToast(`Erro ao enviar arquivo: ${error.message}`, 'error'); console.error('Upload error:', error); continue; }
+    const { data: publicData } = sb.storage.from('produtos').getPublicUrl(filePath);
+    if (!publicData?.publicUrl) { showToast('Erro ao obter URL pública', 'error'); continue; }
+    window.productMidiasState = window.productMidiasState || [];
+    window.productMidiasState.push({ url: publicData.publicUrl, type: file.type.startsWith('video/') ? 'video' : 'image' });
+    console.log('Arquivo enviado:', publicData.publicUrl);
+    renderProductMidiasPreview();
+  }
+  e.target.value = '';
+});
+
+// Limpar galeria ao fechar modal
+$('productFormModal')?.addEventListener('click', (e) => {
+  if (e.target?.dataset?.close === 'productFormModal') {
+    window.productMidiasState = [];
+    renderProductMidiasPreview();
+    $('productForm').reset();
+    $('productId').value = '';
   }
 });
 
@@ -1659,6 +1784,7 @@ function resetPromotionForm() {
   $('promotionImageFile').value = '';
   selectedPromotionProductIds = [];
   renderPromotionProductsSummary();
+  updatePromotionSavingsInfo();
   setSelectedPromotionDays([]);
   $('btnDeletePromotion').style.display = 'none';
 }
@@ -1690,10 +1816,17 @@ function fillPromotionForm(promo) {
     selectedPromotionProductIds = [];
   }
   renderPromotionProductsSummary();
+  ensurePromotionProductsCatalog()
+    .then(() => {
+      renderPromotionProductsSummary();
+      syncPromotionOriginalPrice();
+      updatePromotionSavingsInfo();
+    })
+    .catch(() => {});
   $('promotionButtonText').value = promo.button_text || 'Ver Produto';
-  $('promotionDiscount').value = promo.discount_percent ?? '';
   $('promotionOriginalPrice').value = promo.original_price ?? '';
   $('promotionPromoPrice').value = promo.promo_price ?? '';
+  updatePromotionSavingsInfo();
   $('promotionDateStart').value = promo.start_date || '';
   $('promotionDateEnd').value = promo.end_date || '';
   $('promotionTimeStart').value = promo.start_time ? promo.start_time.slice(0, 5) : '00:00';
@@ -1725,7 +1858,45 @@ function renderPromotionProductsSummary() {
 
   const labels = picked.slice(0, 3).map(p => p.nome).join(' · ');
   const extra = picked.length > 3 ? ` +${picked.length - 3}` : '';
-  box.textContent = `${labels}${extra}`;
+  const total = picked.reduce((sum, item) => sum + Number(item.preco || 0), 0);
+  box.textContent = `${labels}${extra} · Total atual: ${formatMoney(total)}`;
+}
+
+function syncPromotionOriginalPrice() {
+  const input = $('promotionOriginalPrice');
+  if (!input) return;
+
+  const picked = selectedPromotionProductIds
+    .map(id => promotionProductsCatalog.find(p => Number(p.id) === Number(id)))
+    .filter(Boolean);
+
+  if (!picked.length) return;
+
+  const total = picked.reduce((sum, item) => sum + Number(item.preco || 0), 0);
+  input.value = total.toFixed(2);
+  updatePromotionSavingsInfo();
+}
+
+function updatePromotionSavingsInfo() {
+  const el = $('promotionSavingsInfo');
+  if (!el) return;
+
+  const original = Number($('promotionOriginalPrice')?.value || 0);
+  const promotional = Number($('promotionPromoPrice')?.value || 0);
+
+  if (!(original > 0) || !(promotional > 0)) {
+    el.textContent = 'Economia: defina o valor promocional.';
+    return;
+  }
+
+  if (promotional >= original) {
+    el.textContent = 'Economia: valor promocional deve ser menor que o original.';
+    return;
+  }
+
+  const savings = original - promotional;
+  const savingsPct = (savings / original) * 100;
+  el.textContent = `Economia: ${formatMoney(savings)} (${savingsPct.toFixed(1)}%)`;
 }
 
 async function ensurePromotionProductsCatalog() {
@@ -1777,6 +1948,7 @@ function renderPromotionProductsGrid(searchTerm = '') {
       }
       renderPromotionProductsGrid($('promotionProductsSearch')?.value || '');
       renderPromotionProductsSummary();
+      syncPromotionOriginalPrice();
     });
   });
 }
@@ -1871,15 +2043,20 @@ function bindPromotionImageUpload() {
   dropzone.dataset.bound = '1';
 }
 
-async function syncPromotionCoupon(promotionId, promoName, couponCode, discountPercent, dateStart, dateEnd, isActive) {
+async function syncPromotionCoupon(promotionId, promoName, couponCode, originalPrice, promoPrice, dateStart, dateEnd, isActive) {
   const normalizedCode = (couponCode || '').trim().toUpperCase();
   if (!normalizedCode) return;
+
+  const originalValue = Number(originalPrice || 0);
+  const promotionalValue = Number(promoPrice || 0);
+  const discountValue = Math.max(0, Number((originalValue - promotionalValue).toFixed(2)));
+  if (discountValue <= 0) return;
 
   const payload = {
     code: normalizedCode,
     description: `Cupom da promoção: ${promoName}`,
-    discount_type: 'percent',
-    discount_value: Number(discountPercent || 0),
+    discount_type: 'fixed',
+    discount_value: discountValue,
     is_active: isActive,
     starts_at: dateStart ? `${dateStart}T00:00:00` : null,
     expires_at: dateEnd ? `${dateEnd}T23:59:59` : null,
@@ -1995,10 +2172,21 @@ $('promotionForm')?.addEventListener('submit', async (event) => {
   const couponCode = $('promotionCoupon').value.trim().toUpperCase();
   const dateStart = $('promotionDateStart').value || null;
   const dateEnd = $('promotionDateEnd').value || null;
-  const discountPercent = $('promotionDiscount').value ? Number($('promotionDiscount').value) : null;
+  const originalPrice = $('promotionOriginalPrice').value ? Number($('promotionOriginalPrice').value) : null;
+  const promoPrice = $('promotionPromoPrice').value ? Number($('promotionPromoPrice').value) : null;
 
   if (!name || !title || !description) {
     showToast('Preencha nome, título e descrição', 'error');
+    return;
+  }
+
+  if (!(originalPrice > 0) || !(promoPrice > 0)) {
+    showToast('Defina o valor original e o valor promocional da oferta', 'error');
+    return;
+  }
+
+  if (promoPrice >= originalPrice) {
+    showToast('O valor promocional precisa ser menor que o valor original', 'error');
     return;
   }
 
@@ -2015,9 +2203,9 @@ $('promotionForm')?.addEventListener('submit', async (event) => {
     rules: $('promotionRules').value.trim() || null,
     image_url: $('promotionImageUrl').value.trim() || null,
     coupon_code: couponCode || null,
-    discount_percent: discountPercent,
-    original_price: $('promotionOriginalPrice').value ? Number($('promotionOriginalPrice').value) : null,
-    promo_price: $('promotionPromoPrice').value ? Number($('promotionPromoPrice').value) : null,
+    discount_percent: null,
+    original_price: originalPrice,
+    promo_price: promoPrice,
     product_id: selectedPromotionProductIds.length ? Number(selectedPromotionProductIds[0]) : null,
     product_ids: selectedPromotionProductIds,
     button_text: $('promotionButtonText').value.trim() || 'Ver Produto',
@@ -2047,7 +2235,7 @@ $('promotionForm')?.addEventListener('submit', async (event) => {
     }
 
     if (couponCode && promotionId) {
-      await syncPromotionCoupon(promotionId, name, couponCode, discountPercent, dateStart, dateEnd, payload.is_active);
+      await syncPromotionCoupon(promotionId, name, couponCode, originalPrice, promoPrice, dateStart, dateEnd, payload.is_active);
     }
 
     resetPromotionForm();
@@ -2063,8 +2251,11 @@ resetPromotionForm();
 $('btnOpenPromotionProductsModal')?.addEventListener('click', openPromotionProductsModal);
 $('btnApplyPromotionProducts')?.addEventListener('click', () => {
   renderPromotionProductsSummary();
+  syncPromotionOriginalPrice();
   $('promotionProductsModal').classList.add('hidden');
 });
+
+$('promotionPromoPrice')?.addEventListener('input', updatePromotionSavingsInfo);
 
 $('promotionProductsSearch')?.addEventListener('input', (event) => {
   renderPromotionProductsGrid(event.target.value || '');

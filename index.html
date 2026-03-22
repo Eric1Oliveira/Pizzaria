@@ -89,21 +89,21 @@
 
   <!-- Info Strip - Premium Grid -->
   <div class="info-grid">
-    <div class="info-card">
+    <div class="info-card info-card--tempo">
       <div class="info-card__icon"><i class="fas fa-clock"></i></div>
       <div class="info-card__content">
         <span class="info-card__label">Tempo</span>
         <span class="info-card__value" id="tempoEntrega">40-60 min</span>
       </div>
     </div>
-    <div class="info-card">
+    <div class="info-card info-card--minimo">
       <div class="info-card__icon"><i class="fas fa-receipt"></i></div>
       <div class="info-card__content">
         <span class="info-card__label">Mínimo</span>
         <span class="info-card__value">R$ <span id="pedidoMinimo">25,00</span></span>
       </div>
     </div>
-    <div class="info-card">
+    <div class="info-card info-card--entrega">
       <div class="info-card__icon"><i class="fas fa-truck"></i></div>
       <div class="info-card__content">
         <span class="info-card__label">Entrega</span>
@@ -391,6 +391,7 @@
     <div class="promo-popup__content">
       <h3 id="promoPopupTitle">Promoção</h3>
       <p id="promoPopupDescription"></p>
+      <div class="promo-popup__items hidden" id="promoPopupItems"></div>
       <div class="promo-popup__prices">
         <span class="promo-popup__price-old" id="promoPopupOldPrice"></span>
         <span class="promo-popup__price-new" id="promoPopupNewPrice"></span>

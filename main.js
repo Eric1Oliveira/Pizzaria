@@ -27,11 +27,16 @@ let searchQuery = '';
 let deliveryType = 'delivery';
 let paymentType = 'online';
 let paymentOnDeliveryMethod = 'dinheiro';
-const DELIVERY_FEE = 5;
+const DEFAULT_DELIVERY_FEE_OUTSIDE_AREA = 20;
+let deliveryZones = [];
 let activePromotion = null;
 let firstOrderCache = { userId: null, isFirstOrder: false };
 let appliedCoupon = null;
 let runtimeConfig = {};
+let consumedPromotionUserId = null;
+let consumedPromotionIds = new Set();
+let usedCouponCodesUserId = null;
+let usedCouponCodes = new Set();
 const PROMO_SESSION_KEY = 'cjs_promo_session_id';
 const promoSessionId = (() => {
   const existing = localStorage.getItem(PROMO_SESSION_KEY);
@@ -74,6 +79,120 @@ function parseCsvList(value) {
     .split(',')
     .map(item => item.trim().toLowerCase())
     .filter(Boolean);
+}
+
+function normalizeTextKey(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function loadDeliveryZones() {
+  try {
+    const { data, error } = await withTimeout(
+      supabaseClient
+        .from('delivery_zones')
+        .select('id,nome,taxa_entrega,raio_km')
+        .order('raio_km', { ascending: true }),
+      12000
+    );
+    if (error) throw error;
+    deliveryZones = Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.error('Erro ao carregar regiões de entrega:', err.message || err);
+    deliveryZones = [];
+  }
+}
+
+function findDeliveryZoneForAddress(bairroValue) {
+  const bairroKey = normalizeTextKey(bairroValue);
+  if (!bairroKey || !deliveryZones.length) return null;
+
+  let best = null;
+  let score = -1;
+
+  deliveryZones.forEach(zone => {
+    const zoneKey = normalizeTextKey(zone?.nome);
+    if (!zoneKey) return;
+    const matched = bairroKey.includes(zoneKey) || zoneKey.includes(bairroKey);
+    if (!matched) return;
+    const zoneScore = zoneKey.length;
+    if (zoneScore > score) {
+      score = zoneScore;
+      best = zone;
+    }
+  });
+
+  return best;
+}
+
+function getCurrentDeliveryFee() {
+  if (deliveryType !== 'delivery') return 0;
+  const bairro = $('addrBairro')?.value?.trim() || '';
+  const matchedZone = findDeliveryZoneForAddress(bairro);
+  if (matchedZone) {
+    const zoneFee = Number(matchedZone.taxa_entrega || 0);
+    if (Number.isFinite(zoneFee) && zoneFee >= 0) return zoneFee;
+  }
+  return DEFAULT_DELIVERY_FEE_OUTSIDE_AREA;
+}
+
+function updateDeliveryFeePreview() {
+  const fee = getCurrentDeliveryFee();
+  if ($('taxaEntrega')) {
+    $('taxaEntrega').textContent = fee.toFixed(2).replace('.', ',');
+  }
+}
+
+function normalizeCategoryKey(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function categoryInSetByKey(categorySet, categoryKey) {
+  for (const item of categorySet || []) {
+    if (normalizeCategoryKey(item) === categoryKey) return true;
+  }
+  return false;
+}
+
+function isAlwaysBothPeriodsCategory(categoryKey) {
+  return new Set([
+    'bebida',
+    'bebidas',
+    'drink',
+    'drinks',
+    'refrigerante',
+    'refrigerantes',
+    'suco',
+    'sucos',
+    'agua',
+    'aguas',
+    'cerveja',
+    'cervejas'
+  ]).has(categoryKey);
+}
+
+function isLunchSupportCategory(categoryKey) {
+  return new Set([
+    'sobremesa',
+    'sobremesas',
+    'doce',
+    'doces',
+    'acompanhamento',
+    'acompanhamentos',
+    'porcao',
+    'porcoes',
+    'entrada',
+    'entradas'
+  ]).has(categoryKey);
 }
 
 async function loadRuntimeConfig() {
@@ -166,9 +285,25 @@ function getProductAvailability(product) {
   }
 
   const schedule = getScheduleContext();
-  const category = String(product.categoria || '').toLowerCase();
-  const inLunchCatalog = schedule.lunch.categories.has(category);
-  const inDinnerCatalog = schedule.dinner.categories.has(category);
+  const category = normalizeCategoryKey(product.categoria);
+  const inLunchCatalog = categoryInSetByKey(schedule.lunch.categories, category);
+  const inDinnerCatalog = categoryInSetByKey(schedule.dinner.categories, category);
+  const alwaysBothPeriods = isAlwaysBothPeriodsCategory(category);
+  const lunchSupport = isLunchSupportCategory(category);
+
+  // BEBIDAS: sempre disponíveis se dia aberto e não estiver no intervalo
+  if (alwaysBothPeriods) {
+    if (!schedule.dayOpen) {
+      return { canBuy: false, reason: 'Fechado hoje' };
+    }
+    if (schedule.inBreak) {
+      return { canBuy: false, reason: 'Fechado entre 15h e 18h' };
+    }
+    if (!schedule.activePeriod) {
+      return { canBuy: false, reason: cfg('schedule_message_closed') || 'Fora do horário de atendimento' };
+    }
+    return { canBuy: true, reason: '' };
+  }
 
   if (!schedule.dayOpen) {
     return { canBuy: false, reason: 'Fechado hoje' };
@@ -179,18 +314,49 @@ function getProductAvailability(product) {
   }
 
   if (!schedule.activePeriod) {
-    if (inLunchCatalog) return { canBuy: false, reason: `Disponível a partir de ${cfg('lunch_start')}` };
-    if (inDinnerCatalog) return { canBuy: false, reason: `Disponível a partir de ${cfg('dinner_start')}` };
+    if (inLunchCatalog || lunchSupport) return { canBuy: false, reason: `Disponível no almoço (${cfg('lunch_start')} às ${cfg('lunch_end')})` };
+    if (inDinnerCatalog) return { canBuy: false, reason: `Disponível no jantar (${cfg('dinner_start')} às ${cfg('dinner_end')})` };
     return { canBuy: false, reason: cfg('schedule_message_closed') || 'Fora do horário de atendimento' };
   }
 
-  if (!schedule.activePeriod.categories.has(category)) {
+  if (schedule.activePeriod.key === 'lunch' && lunchSupport) {
+    return { canBuy: true, reason: '' };
+  }
+
+  if (!categoryInSetByKey(schedule.activePeriod.categories, category)) {
     if (inDinnerCatalog) return { canBuy: false, reason: `Disponível no jantar (${cfg('dinner_start')} às ${cfg('dinner_end')})` };
     if (inLunchCatalog) return { canBuy: false, reason: `Disponível no almoço (${cfg('lunch_start')} às ${cfg('lunch_end')})` };
     return { canBuy: false, reason: 'Indisponível neste período' };
   }
 
   return { canBuy: true, reason: '' };
+}
+
+function getAvailabilityTone(reason) {
+  const text = normalizeTextKey(reason || '');
+  if (!text) return 'neutral';
+
+  if (text.includes('fechado hoje') || text.includes('fechado agora') || text.includes('fechado no momento')) {
+    return 'closed';
+  }
+
+  if (text.includes('fechado entre')) {
+    return 'break';
+  }
+
+  if (text.includes('almoco') || text.includes('jantar') || text.includes('horario')) {
+    return 'schedule';
+  }
+
+  if (text.includes('neste periodo') || text.includes('periodo')) {
+    return 'period';
+  }
+
+  if (text.includes('indisponivel')) {
+    return 'unavailable';
+  }
+
+  return 'neutral';
 }
 
 // ============================================================
@@ -278,6 +444,9 @@ $('promoPopupDismiss').addEventListener('click', () => closePromoPopup(true));
 
 $('promoPopupAction').addEventListener('click', async () => {
   if (!activePromotion) return;
+  const originalPromotionPrice = parsePriceValue(activePromotion.original_price);
+  const promotionalPrice = parsePriceValue(activePromotion.promo_price);
+  const hasFixedPromotionPrice = originalPromotionPrice > 0 && promotionalPrice > 0 && promotionalPrice < originalPromotionPrice;
   if (activePromotion.id) {
     sessionStorage.setItem('cjs_last_popup_promo_id', String(activePromotion.id));
     await trackPromotionEvent(activePromotion.id, 'click', {
@@ -286,7 +455,7 @@ $('promoPopupAction').addEventListener('click', async () => {
     }).catch(() => {});
   }
 
-  if (activePromotion.coupon_code) {
+  if (activePromotion.coupon_code && !hasFixedPromotionPrice) {
     try {
       await navigator.clipboard.writeText(activePromotion.coupon_code);
       showToast(`Cupom ${activePromotion.coupon_code} copiado!`, 'success');
@@ -300,9 +469,22 @@ $('promoPopupAction').addEventListener('click', async () => {
   if (!products.length) {
     await loadProducts();
   }
-  const selectedIds = Array.isArray(activePromotion.product_ids)
-    ? activePromotion.product_ids.map(v => Number(v)).filter(v => Number.isFinite(v))
-    : [];
+
+  if (hasFixedPromotionPrice && addPromotionToCart(activePromotion)) {
+    openCart();
+    return;
+  }
+
+  if (hasFixedPromotionPrice) {
+    // Never fallback to regular product flow when promotion is fixed-price.
+    return;
+  }
+
+  const selectedIds = getPromotionSelectedIds(activePromotion);
+  if (!selectedIds.length) {
+    showToast('Essa promoção não possui produtos vinculados', 'error');
+    return;
+  }
 
   if (selectedIds.length > 1) {
     selectedIds.forEach(id => addToCart(id, 1));
@@ -431,12 +613,28 @@ function renderProducts() {
     items.forEach(p => {
       const inCart = cart.find(c => c.id === p.id);
       const availability = getProductAvailability(p);
+      const availabilityTone = getAvailabilityTone(availability.reason);
+      const dataCategory = normalizeCategoryKey(p.categoria);
+      // Primeira mídia (imagem ou vídeo)
+      let midiaHtml = '';
+      const midiasArr = Array.isArray(p.midias) ? p.midias : (p.midias ? [p.midias] : []);
+      const typesArr = Array.isArray(p.midias_types) ? p.midias_types : (p.midias_types ? [p.midias_types] : []);
+      if (midiasArr.length > 0) {
+        const idx = typesArr[0] === 'video' ? midiasArr.findIndex((_, i) => typesArr[i] === 'image') : 0;
+        const url = midiasArr[idx >= 0 ? idx : 0];
+        const type = typesArr[idx >= 0 ? idx : 0] || 'image';
+        if (type === 'image') {
+          midiaHtml = `<img class="product-card__img" src="${escapeHtml(url)}" alt="${escapeHtml(p.nome)}" loading="lazy">`;
+        } else if (type === 'video') {
+          midiaHtml = `<video class="product-card__img" src="${escapeHtml(url)}" alt="${escapeHtml(p.nome)}" muted playsinline preload="metadata" style="object-fit:contain;width:100%;height:100%;max-height:120px;"></video>`;
+        }
+      }
       html += `
-      <div class="product-card" data-id="${p.id}">
+      <div class="product-card" data-id="${p.id}" data-category="${dataCategory}">
         <div class="product-card__img-wrap">
-          ${p.imagem_url ? `<img class="product-card__img" src="${escapeHtml(p.imagem_url)}" alt="${escapeHtml(p.nome)}" loading="lazy">` : ''}
+          ${midiaHtml}
           <span class="product-card__category">${escapeHtml(formatCategory(p.categoria))}</span>
-          ${!availability.canBuy ? `<div class="product-card__unavailable">${escapeHtml(availability.reason || 'Indisponível')}</div>` : ''}
+          ${!availability.canBuy ? `<div class="product-card__unavailable"><span class="product-card__unavailable-badge product-card__unavailable-badge--${availabilityTone}"><i class="fas fa-clock"></i>${escapeHtml(availability.reason || 'Indisponível')}</span></div>` : ''}
         </div>
         <div class="product-card__body">
           <div class="product-card__name">${escapeHtml(p.nome)}</div>
@@ -472,12 +670,27 @@ function openProductDetail(id) {
   const p = products.find(x => x.id === id);
   if (!p) return;
   const availability = getProductAvailability(p);
+  const availabilityTone = getAvailabilityTone(availability.reason);
   const inCart = cart.find(c => c.id === id);
   const qty = inCart ? inCart.qty : 1;
   $('productModalTitle').textContent = p.nome;
+  // Galeria/carrossel de mídias
+  let galeria = '';
+  if (Array.isArray(p.midias) && p.midias.length > 0) {
+    galeria = '<div class="product-detail__gallery">';
+    p.midias.forEach((url, i) => {
+      const type = p.midias_types ? p.midias_types[i] : 'image';
+      if (type === 'image') {
+        galeria += `<img class="product-detail__img" src="${escapeHtml(url)}" alt="${escapeHtml(p.nome)}">`;
+      } else if (type === 'video') {
+        galeria += `<video class="product-detail__img" src="${escapeHtml(url)}" controls muted playsinline preload="metadata" style="object-fit:contain;width:100%;max-height:220px;"></video>`;
+      }
+    });
+    galeria += '</div>';
+  }
   $('productModalBody').innerHTML = `
     <div class="product-detail">
-      ${p.imagem_url ? `<img class="product-detail__img" src="${escapeHtml(p.imagem_url)}" alt="${escapeHtml(p.nome)}">` : ''}
+      ${galeria}
       <div class="product-detail__name">${escapeHtml(p.nome)}</div>
       <div class="product-detail__desc">${escapeHtml(p.descricao || 'Sem descrição disponível.')}</div>
       <div class="product-detail__price">${formatMoney(p.preco)}</div>
@@ -491,7 +704,7 @@ function openProductDetail(id) {
         <button class="btn btn--primary btn--lg" id="detailAdd" style="flex:1;">
           <i class="fas fa-cart-plus"></i> Adicionar ${formatMoney(p.preco * qty)}
         </button>
-      </div>` : `<p style="color:var(--red);font-weight:600;">${escapeHtml(availability.reason || 'Produto indisponível')}</p>`}
+      </div>` : `<p class="product-detail__availability product-detail__availability--${availabilityTone}"><i class="fas fa-clock"></i><span>${escapeHtml(availability.reason || 'Produto indisponível')}</span></p>`}
     </div>
   `;
   if (availability.canBuy) {
@@ -532,6 +745,141 @@ $('searchInput').addEventListener('input', (e) => {
 // ============================================================
 //  CART
 // ============================================================
+function parsePriceValue(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+
+  const raw = String(value ?? '').trim();
+  if (!raw) return 0;
+
+  if (raw.includes(',')) {
+    const normalized = raw.replace(/\./g, '').replace(',', '.');
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function parseIdList(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map(entry => Number(entry))
+      .filter(entry => Number.isFinite(entry) && entry > 0);
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? [Math.trunc(value)] : [];
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value
+      .trim()
+      .replace(/[\[\]{}()]/g, '')
+      .replace(/;/g, ',');
+
+    if (!normalized) return [];
+
+    return normalized
+      .split(',')
+      .map(entry => Number(String(entry).trim()))
+      .filter(entry => Number.isFinite(entry) && entry > 0);
+  }
+
+  return [];
+}
+
+function getPromotionSelectedIds(promo) {
+  const selectedIds = parseIdList(promo?.product_ids);
+
+  if (selectedIds.length) return selectedIds;
+
+  return parseIdList(promo?.product_id);
+}
+
+function getCartItemProductIds(item) {
+  const productIds = parseIdList(item?.product_ids);
+
+  if (productIds.length) return productIds;
+
+  return parseIdList(item?.id);
+}
+
+function getCartItemBlockedReason(item) {
+  if (item?.is_promotional) return '';
+
+  const productIds = getCartItemProductIds(item);
+  for (const productId of productIds) {
+    const product = products.find(entry => entry.id === productId);
+    if (!product) continue;
+    const availability = getProductAvailability(product);
+    if (!availability.canBuy) return availability.reason || 'Indisponível agora';
+  }
+  return '';
+}
+
+function addPromotionToCart(promo) {
+  const selectedIds = getPromotionSelectedIds(promo);
+  if (!selectedIds.length) {
+    showToast('Selecione ao menos um produto para essa promoção', 'error');
+    return false;
+  }
+
+  const originalPrice = parsePriceValue(promo.original_price);
+  const promoPrice = parsePriceValue(promo.promo_price);
+  if (!(originalPrice > 0) || !(promoPrice > 0) || promoPrice >= originalPrice) {
+    showToast('Essa promoção está com preços inválidos', 'error');
+    return false;
+  }
+
+  const selectedProducts = selectedIds
+    .map(productId => products.find(entry => entry.id === productId))
+    .filter(Boolean);
+  const availableProducts = selectedProducts.filter(product => getProductAvailability(product).canBuy);
+
+  if (selectedProducts.length && !availableProducts.length) {
+    const firstReason = getProductAvailability(selectedProducts[0]).reason || 'Item promocional indisponível agora';
+    showToast(firstReason, 'error');
+    return false;
+  }
+
+  const referenceProduct = availableProducts[0] || selectedProducts[0] || null;
+  const promotionId = Number(promo.id || Date.now());
+  const cartItemId = -(1000000 + promotionId);
+  const existing = cart.find(item => Number(item.id) === cartItemId);
+
+  if (existing) {
+    existing.preco = promoPrice;
+    existing.original_price = originalPrice;
+    existing.nome = selectedProducts.length > 1
+      ? (promo.title || promo.name || 'Kit promocional')
+      : `${referenceProduct?.nome || promo.title || promo.name || 'Item promocional'} · Promoção`;
+    existing.imagem_url = promo.image_url || referenceProduct?.imagem_url || existing.imagem_url || '';
+    existing.qty += 1;
+  } else {
+    const itemName = selectedProducts.length > 1
+      ? (promo.title || promo.name || 'Kit promocional')
+      : `${referenceProduct?.nome || promo.title || promo.name || 'Item promocional'} · Promoção`;
+
+    cart.push({
+      id: cartItemId,
+      nome: itemName,
+      preco: promoPrice,
+      original_price: originalPrice,
+      imagem_url: promo.image_url || referenceProduct?.imagem_url || '',
+      qty: 1,
+      promotion_id: promo.id || null,
+      product_ids: selectedIds,
+      is_promotional: true
+    });
+  }
+
+  saveCart();
+  showToast('Oferta promocional adicionada ao carrinho', 'success');
+  renderProducts();
+  return true;
+}
+
 function addToCart(id, qty = 1) {
   const p = products.find(x => x.id === id);
   if (!p) return;
@@ -573,6 +921,8 @@ function normalizeCouponCode(code) {
 function clearCouponState() {
   appliedCoupon = null;
   $('couponInput').value = '';
+  $('couponInput').readOnly = false;
+  $('couponInput').disabled = false;
   $('btnApplyCoupon').classList.remove('hidden');
   $('btnRemoveCoupon').classList.add('hidden');
   $('cartCouponStatus').textContent = '';
@@ -580,8 +930,8 @@ function clearCouponState() {
 }
 
 function getCartPricing() {
-  const subtotal = cart.reduce((sum, item) => sum + (Number(item.preco || 0) * Number(item.qty || 0)), 0);
-  const fee = deliveryType === 'delivery' ? DELIVERY_FEE : 0;
+  const subtotal = cart.reduce((sum, item) => sum + (parsePriceValue(item.preco) * Number(item.qty || 0)), 0);
+  const fee = getCurrentDeliveryFee();
   let discount = 0;
 
   if (appliedCoupon) {
@@ -625,14 +975,22 @@ async function validateCouponCode(rawCode, silent = false) {
     return { valid: false, reason: 'Cupom já atingiu o limite de usos' };
   }
 
-  if (currentUser?.id && Number(coupon.per_user_limit || 0) > 0) {
+  if (Number(coupon.linked_promotion_id || 0) > 0) {
+    const promotionAlreadyApplied = cart.some(item => Number(item.promotion_id || 0) === Number(coupon.linked_promotion_id || 0));
+    if (promotionAlreadyApplied) {
+      return { valid: false, reason: 'Essa promoção já está aplicada no carrinho' };
+    }
+  }
+
+  if (currentUser?.id) {
+    const maxPerUser = Number(coupon.per_user_limit || 1) > 0 ? Number(coupon.per_user_limit || 1) : 1;
     const { count, error: usageErr } = await supabaseClient
       .from('pedidos')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', currentUser.id)
       .eq('coupon_code', code);
-    if (!usageErr && Number(count || 0) >= Number(coupon.per_user_limit || 0)) {
-      return { valid: false, reason: 'Você já usou este cupom no limite permitido' };
+    if (!usageErr && Number(count || 0) >= maxPerUser) {
+      return { valid: false, reason: 'Você já utilizou este cupom e não pode usar novamente' };
     }
   }
 
@@ -641,6 +999,12 @@ async function validateCouponCode(rawCode, silent = false) {
 }
 
 async function applyCouponFromInput() {
+  if (appliedCoupon?.code) {
+    showToast('Já existe um cupom aplicado neste carrinho', 'info');
+    $('cartCouponStatus').textContent = `Cupom ${appliedCoupon.code} ativo`;
+    return;
+  }
+
   const code = normalizeCouponCode($('couponInput').value);
   const result = await validateCouponCode(code);
   if (!result.valid) {
@@ -651,6 +1015,8 @@ async function applyCouponFromInput() {
 
   appliedCoupon = result.coupon;
   $('couponInput').value = appliedCoupon.code;
+  $('couponInput').readOnly = true;
+  $('couponInput').disabled = true;
   $('btnApplyCoupon').classList.add('hidden');
   $('btnRemoveCoupon').classList.remove('hidden');
   $('cartCouponStatus').textContent = `Cupom ${appliedCoupon.code} ativo`;
@@ -665,6 +1031,12 @@ function updateCartUI() {
   const fee = pricing.fee;
   const discount = pricing.discount;
   const total = pricing.total;
+  const itemsTotal = Math.max(0, subtotal - discount);
+
+  $('couponInput').readOnly = Boolean(appliedCoupon?.code);
+  $('couponInput').disabled = Boolean(appliedCoupon?.code);
+  $('btnApplyCoupon').classList.toggle('hidden', Boolean(appliedCoupon?.code));
+  $('btnRemoveCoupon').classList.toggle('hidden', !appliedCoupon?.code);
 
   // Badges
   $('cartBadgeMenu').textContent = count;
@@ -683,7 +1055,7 @@ function updateCartUI() {
         ${item.imagem_url ? `<img class="cart-item__img" src="${escapeHtml(item.imagem_url)}" alt="">` : '<div class="cart-item__img" style="background:var(--cream);"></div>'}
         <div class="cart-item__info">
           <div class="cart-item__name">${escapeHtml(item.nome)}</div>
-          <div class="cart-item__price">${formatMoney(item.preco)}</div>
+          <div class="cart-item__price">${Number(item.original_price || 0) > Number(item.preco || 0) ? `<span style="text-decoration:line-through;opacity:.65;margin-right:6px;">${formatMoney(item.original_price)}</span>` : ''}${formatMoney(item.preco)}</div>
           <div class="cart-item__controls">
             <button class="cart-item__qty-btn ${item.qty === 1 ? 'cart-item__qty-btn--remove' : ''}" data-id="${item.id}" data-action="minus">
               <i class="fas ${item.qty === 1 ? 'fa-trash-alt' : 'fa-minus'}"></i>
@@ -711,15 +1083,10 @@ function updateCartUI() {
   $('cartDiscountLine').classList.toggle('hidden', discount <= 0);
   $('cartTotal').textContent = formatMoney(total);
 
-  const blockedItem = cart.find(item => {
-    const product = products.find(p => p.id === item.id);
-    if (!product) return false;
-    return !getProductAvailability(product).canBuy;
-  });
+  const blockedItem = cart.find(item => Boolean(getCartItemBlockedReason(item)));
 
   if (blockedItem) {
-    const product = products.find(p => p.id === blockedItem.id);
-    const reason = getProductAvailability(product).reason || 'Indisponível agora';
+    const reason = getCartItemBlockedReason(blockedItem) || 'Indisponível agora';
     $('btnCheckout').disabled = true;
     $('cartCouponStatus').textContent = `Atenção: ${blockedItem.nome} está bloqueado (${reason})`;
   } else {
@@ -764,8 +1131,19 @@ document.querySelectorAll('.delivery-opt').forEach(btn => {
     deliveryType = btn.dataset.tipo;
     $('addressSection').style.display = deliveryType === 'delivery' ? 'flex' : 'none';
     $('deliveryLine').style.display = deliveryType === 'delivery' ? 'flex' : 'none';
+    updateDeliveryFeePreview();
     updateCartUI();
   });
+});
+
+$('addrBairro')?.addEventListener('input', () => {
+  updateDeliveryFeePreview();
+  updateCartUI();
+});
+
+$('addrBairro')?.addEventListener('change', () => {
+  updateDeliveryFeePreview();
+  updateCartUI();
 });
 
 // Payment type toggle
@@ -812,6 +1190,7 @@ function fillAddressFromUser() {
   if (addr.number) $('addrNumber').value = addr.number;
   if (addr.comp) $('addrComp').value = addr.comp;
   if (addr.bairro) $('addrBairro').value = addr.bairro;
+  updateDeliveryFeePreview();
 }
 
 async function saveAddressToUser() {
@@ -835,14 +1214,9 @@ async function handleCheckout() {
     showToast('Preencha rua, número e bairro', 'error'); return;
   }
 
-  const blockedCartItem = cart.find(item => {
-    const product = products.find(p => p.id === item.id);
-    if (!product) return false;
-    return !getProductAvailability(product).canBuy;
-  });
+  const blockedCartItem = cart.find(item => Boolean(getCartItemBlockedReason(item)));
   if (blockedCartItem) {
-    const product = products.find(p => p.id === blockedCartItem.id);
-    const reason = getProductAvailability(product).reason || 'Indisponível agora';
+    const reason = getCartItemBlockedReason(blockedCartItem) || 'Indisponível agora';
     showToast(`${blockedCartItem.nome}: ${reason}`, 'error');
     return;
   }
@@ -884,7 +1258,7 @@ async function handleCheckout() {
 
     const pedidoBase = {
       user_id: currentUser.id,
-      itens: cart.map(c => ({ id: c.id, nome: c.nome, preco: c.preco, qty: c.qty })),
+      itens: cart.map(c => ({ id: c.id, nome: c.nome, preco: c.preco, qty: c.qty, original_price: c.original_price || null, promotion_id: c.promotion_id || null, product_ids: c.product_ids || [] })),
       total,
       status: 'pendente',
       nome_cliente: currentUser.user_metadata?.name || currentUser.email,
@@ -959,7 +1333,7 @@ async function handleCheckout() {
     // Save order to Supabase
     const pedidoData = {
       user_id: currentUser.id,
-      itens: cart.map(c => ({ id: c.id, nome: c.nome, preco: c.preco, qty: c.qty })),
+      itens: cart.map(c => ({ id: c.id, nome: c.nome, preco: c.preco, qty: c.qty, original_price: c.original_price || null, promotion_id: c.promotion_id || null, product_ids: c.product_ids || [] })),
       total,
       status: 'pendente',
       nome_cliente: currentUser.user_metadata?.name || currentUser.email,
@@ -1363,10 +1737,66 @@ async function matchesPromotionType(promo) {
   return false;
 }
 
+async function getPromotionProductsForSchedule(promo) {
+  const selectedIds = getPromotionSelectedIds(promo);
+  if (!selectedIds.length) return [];
+
+  const localMap = new Map(products.map(item => [Number(item.id), item]));
+  const missingIds = selectedIds.filter(id => !localMap.has(Number(id)));
+
+  if (missingIds.length) {
+    try {
+      const { data, error } = await supabaseClient
+        .from('produtos')
+        .select('id,nome,categoria,disponivel,preco,imagem_url')
+        .in('id', missingIds);
+      if (!error && Array.isArray(data)) {
+        data.forEach(item => {
+          localMap.set(Number(item.id), item);
+          if (!products.some(p => Number(p.id) === Number(item.id))) {
+            products.push(item);
+          }
+        });
+      }
+    } catch (_) {
+      // Keep local cache fallback only.
+    }
+  }
+
+  return selectedIds
+    .map(id => localMap.get(Number(id)))
+    .filter(Boolean);
+}
+
+async function matchesPromotionSchedule(promo) {
+  const promoProducts = await getPromotionProductsForSchedule(promo);
+  if (!promoProducts.length) return true;
+
+  const schedule = getScheduleContext();
+  if (!schedule.dayOpen || schedule.inBreak || !schedule.activePeriod) return false;
+
+  // Only block by period/category rules. If a category is not explicitly mapped
+  // in lunch/dinner config, keep promotion eligible.
+  return promoProducts.every(product => {
+    const category = String(product?.categoria || '').toLowerCase().trim();
+    if (!category) return true;
+
+    const inLunchCatalog = schedule.lunch.categories.has(category);
+    const inDinnerCatalog = schedule.dinner.categories.has(category);
+    if (!inLunchCatalog && !inDinnerCatalog) return true;
+
+    return schedule.activePeriod.categories.has(category);
+  });
+}
+
 function isPromotionCooldownOver(promo) {
   const lastClosed = Number(localStorage.getItem(`cjs_promo_closed_${promo.id}`) || '0');
   const cooldownMinutes = Number(promo.cooldown_minutes || 0);
   if (!cooldownMinutes || !lastClosed) return true;
+
+  const promoVersionMs = new Date(promo.updated_at || promo.created_at || 0).getTime();
+  if (promoVersionMs && promoVersionMs > lastClosed) return true;
+
   return (Date.now() - lastClosed) >= (cooldownMinutes * 60000);
 }
 
@@ -1449,6 +1879,89 @@ async function trackPromotionConversion(coupon, orderId) {
     coupon_code: coupon?.code || null,
     order_id: orderId || null
   });
+
+  consumedPromotionIds.add(Number(promotionId));
+  localStorage.setItem(`cjs_promo_consumed_${promotionId}`, '1');
+  if (coupon?.code) {
+    usedCouponCodes.add(String(coupon.code).trim().toUpperCase());
+  }
+}
+
+async function ensureConsumedPromotionCache() {
+  if (!currentUser?.id) {
+    consumedPromotionUserId = null;
+    consumedPromotionIds = new Set();
+    return;
+  }
+
+  if (consumedPromotionUserId === currentUser.id) return;
+
+  consumedPromotionUserId = currentUser.id;
+  consumedPromotionIds = new Set();
+
+  try {
+    const { data, error } = await supabaseClient
+      .from('promotion_popup_events')
+      .select('promotion_id')
+      .eq('user_id', currentUser.id)
+      .eq('event_type', 'conversion');
+    if (!error) {
+      (data || []).forEach(row => {
+        const promoId = Number(row?.promotion_id || 0);
+        if (promoId > 0) {
+          consumedPromotionIds.add(promoId);
+          localStorage.setItem(`cjs_promo_consumed_${promoId}`, '1');
+        }
+      });
+    }
+  } catch (_) {
+    // no-op
+  }
+}
+
+async function ensureUsedCouponCodesCache() {
+  if (!currentUser?.id) {
+    usedCouponCodesUserId = null;
+    usedCouponCodes = new Set();
+    return;
+  }
+
+  if (usedCouponCodesUserId === currentUser.id) return;
+
+  usedCouponCodesUserId = currentUser.id;
+  usedCouponCodes = new Set();
+
+  try {
+    const { data, error } = await supabaseClient
+      .from('pedidos')
+      .select('coupon_code')
+      .eq('user_id', currentUser.id)
+      .not('coupon_code', 'is', null);
+    if (!error) {
+      (data || []).forEach(row => {
+        const code = String(row?.coupon_code || '').trim().toUpperCase();
+        if (code) usedCouponCodes.add(code);
+      });
+    }
+  } catch (_) {
+    // no-op
+  }
+}
+
+async function hasUserConsumedPromotion(promo) {
+  const promoId = Number(promo?.id || 0);
+  const localConsumed = promoId > 0 && localStorage.getItem(`cjs_promo_consumed_${promoId}`) === '1';
+  if (localConsumed) return true;
+
+  await ensureConsumedPromotionCache();
+  await ensureUsedCouponCodesCache();
+
+  if (promoId > 0 && consumedPromotionIds.has(promoId)) return true;
+
+  const promoCouponCode = String(promo?.coupon_code || '').trim().toUpperCase();
+  if (promoCouponCode && usedCouponCodes.has(promoCouponCode)) return true;
+
+  return false;
 }
 
 function renderPromotionPopup(promo) {
@@ -1456,17 +1969,35 @@ function renderPromotionPopup(promo) {
   $('promoPopupTitle').textContent = promo.title || promo.name || 'Promoção especial';
   $('promoPopupDescription').textContent = promo.description || 'Oferta por tempo limitado.';
 
-  const oldPrice = Number(promo.original_price || 0);
-  const newPrice = Number(promo.promo_price || 0);
+  const selectedProducts = getPromotionSelectedIds(promo)
+    .map(id => products.find(item => Number(item.id) === Number(id)))
+    .filter(Boolean);
+  const popupItems = $('promoPopupItems');
+  if (selectedProducts.length > 1) {
+    const names = selectedProducts.slice(0, 3).map(item => item.nome).join(' · ');
+    const extra = selectedProducts.length > 3 ? ` +${selectedProducts.length - 3}` : '';
+    popupItems.textContent = `Kit da oferta: ${names}${extra}`;
+    popupItems.classList.remove('hidden');
+  } else if (selectedProducts.length === 1) {
+    popupItems.textContent = `Item da oferta: ${selectedProducts[0].nome}`;
+    popupItems.classList.remove('hidden');
+  } else {
+    popupItems.textContent = '';
+    popupItems.classList.add('hidden');
+  }
+
+  const oldPrice = parsePriceValue(promo.original_price);
+  const newPrice = parsePriceValue(promo.promo_price);
+  const hasFixedPromotionPrice = oldPrice > 0 && newPrice > 0 && newPrice < oldPrice;
   $('promoPopupOldPrice').textContent = oldPrice > 0 ? formatMoney(oldPrice) : '';
-  $('promoPopupNewPrice').textContent = newPrice > 0 ? formatMoney(newPrice) : (promo.discount_percent ? `${promo.discount_percent}% OFF` : 'Oferta ativa');
+  $('promoPopupNewPrice').textContent = newPrice > 0 ? formatMoney(newPrice) : 'Oferta ativa';
 
   const coupon = (promo.coupon_code || '').trim().toUpperCase();
   $('promoPopupCoupon').textContent = coupon || '-';
   $('promoPopupCouponBox').classList.toggle('hidden', !coupon);
 
   $('promoPopupRules').textContent = promo.rules || 'Consulte as regras no checkout.';
-  $('promoPopupAction').textContent = promo.button_text || 'Ver produto';
+  $('promoPopupAction').textContent = hasFixedPromotionPrice ? 'Aproveitar oferta' : (promo.button_text || (newPrice > 0 ? 'Adicionar oferta' : 'Ver produto'));
 
   const imageEl = $('promoPopupImage');
   if (promo.image_url) {
@@ -1500,6 +2031,8 @@ async function loadPromotionPopup() {
       if (!isDateWithinPromotion(promo)) continue;
       if (!isDayWithinPromotion(promo)) continue;
       if (!isTimeWithinPromotion(promo)) continue;
+      if (!(await matchesPromotionSchedule(promo))) continue;
+      if (await hasUserConsumedPromotion(promo)) continue;
       if (!isPromotionCooldownOver(promo)) continue;
       if (!(await matchesPromotionType(promo))) continue;
       renderPromotionPopup(promo);
@@ -1552,8 +2085,10 @@ function showToast(msg, type = '') {
 // ============================================================
 (async function init() {
   await loadRuntimeConfig();
+  await loadDeliveryZones();
   updateStatus();
   await initAuth();
+  updateDeliveryFeePreview();
   updateCartUI();
   checkPaymentReturn();
 })();

@@ -57,7 +57,9 @@ CREATE TABLE produtos (
   preco NUMERIC(10,2) NOT NULL CHECK (preco >= 0),
   categoria TEXT NOT NULL,
   subcategoria TEXT,
-  imagem_url TEXT,
+  -- imagem_url removido, agora usamos arrays:
+  midias TEXT[], -- array de URLs de imagens e vídeos
+  midias_types TEXT[], -- array de tipos ('image' ou 'video'), mesma ordem de midias
   disponivel BOOLEAN NOT NULL DEFAULT true,
   destaque BOOLEAN NOT NULL DEFAULT false,
   ordem INT DEFAULT 0,
@@ -555,3 +557,47 @@ INSERT INTO site_config (key, value, type, label, section) VALUES
 ('dinner_categories', 'pizzas-tradicionais,pizzas-especiais,pizzas-doces', 'text', 'Categorias Liberadas Jantar', 'horarios'),
 ('schedule_message_closed', 'Fechado no momento', 'text', 'Mensagem Quando Fechado', 'horarios')
 ON CONFLICT (key) DO NOTHING;
+
+-- ============================================================
+-- 15. BLOQUEIO NO BANCO: CUPOM UNICO POR USUARIO
+--    Mesmo cupom nao pode ser reutilizado pelo mesmo user_id
+-- ============================================================
+CREATE OR REPLACE FUNCTION enforce_single_coupon_use_per_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_coupon_code TEXT;
+BEGIN
+  v_coupon_code := upper(trim(coalesce(NEW.coupon_code, '')));
+
+  IF v_coupon_code = '' THEN
+    NEW.coupon_code := NULL;
+    RETURN NEW;
+  END IF;
+
+  NEW.coupon_code := v_coupon_code;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pedidos p
+    WHERE p.user_id = NEW.user_id
+      AND upper(trim(coalesce(p.coupon_code, ''))) = v_coupon_code
+      AND p.id <> coalesce(NEW.id, -1)
+  ) THEN
+    RAISE EXCEPTION 'Cupom % ja utilizado por este cliente', v_coupon_code
+      USING ERRCODE = '23514';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trigger_enforce_single_coupon_use_per_user ON pedidos;
+CREATE TRIGGER trigger_enforce_single_coupon_use_per_user
+  BEFORE INSERT OR UPDATE OF coupon_code, user_id
+  ON pedidos
+  FOR EACH ROW
+  EXECUTE FUNCTION enforce_single_coupon_use_per_user();
