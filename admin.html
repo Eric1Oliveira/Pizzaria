@@ -6,6 +6,7 @@
   <title>Admin - Casa José Silva</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75'>⚙️</text></svg>">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="admin.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -55,6 +56,8 @@
       <button class="nav-item" data-page="pedidos"><i class="fas fa-receipt"></i> Pedidos</button>
       <button class="nav-item" data-page="cardapio"><i class="fas fa-pizza-slice"></i> Cardápio</button>
       <button class="nav-item" data-page="clientes"><i class="fas fa-users"></i> Clientes</button>
+      <button class="nav-item" data-page="entrega"><i class="fas fa-motorcycle"></i> Entrega</button>
+      <button class="nav-item" data-page="promocoes"><i class="fas fa-bullhorn"></i> Promoções</button>
       <button class="nav-item" data-page="config"><i class="fas fa-cog"></i> Configurações</button>
     </nav>
     <div class="sidebar__footer">
@@ -77,19 +80,39 @@
 
     <!-- ====== DASHBOARD PAGE ====== -->
     <div class="page active" id="pageDashboard">
+      <div class="dashboard-toolbar">
+        <div class="dashboard-toolbar__left">
+          <h3>Janela de análise</h3>
+          <p id="kpiPeriodLabel">Últimos 7 dias</p>
+        </div>
+        <div class="dashboard-toolbar__controls">
+          <select id="dashPeriodPreset">
+            <option value="today">Hoje</option>
+            <option value="7d" selected>Últimos 7 dias</option>
+            <option value="30d">Últimos 30 dias</option>
+            <option value="this_month">Este mês</option>
+            <option value="last_month">Mês passado</option>
+            <option value="custom">Personalizado</option>
+          </select>
+          <input type="date" id="dashPeriodStart" disabled>
+          <input type="date" id="dashPeriodEnd" disabled>
+          <button class="btn btn--outline-sm" id="btnApplyPeriod"><i class="fas fa-filter"></i> Aplicar</button>
+        </div>
+      </div>
+
       <!-- KPI Cards -->
       <div class="kpis" id="kpiCards">
         <div class="kpi-card">
           <div class="kpi-card__icon" style="background:rgba(76,175,80,.1);color:#4CAF50;"><i class="fas fa-dollar-sign"></i></div>
           <div class="kpi-card__info">
-            <span class="kpi-card__label">Faturamento Hoje</span>
+            <span class="kpi-card__label">Faturamento Líquido</span>
             <span class="kpi-card__value" id="kpiRevenueToday">R$ 0,00</span>
           </div>
         </div>
         <div class="kpi-card">
           <div class="kpi-card__icon" style="background:rgba(33,150,243,.1);color:#2196F3;"><i class="fas fa-shopping-cart"></i></div>
           <div class="kpi-card__info">
-            <span class="kpi-card__label">Pedidos Hoje</span>
+            <span class="kpi-card__label">Pedidos no Período</span>
             <span class="kpi-card__value" id="kpiOrdersToday">0</span>
           </div>
         </div>
@@ -101,10 +124,49 @@
           </div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-card__icon" style="background:rgba(156,39,176,.1);color:#9C27B0;"><i class="fas fa-calendar-alt"></i></div>
+          <div class="kpi-card__icon" style="background:rgba(197,165,90,.15);color:#A68B3E;"><i class="fas fa-calendar-alt"></i></div>
           <div class="kpi-card__info">
-            <span class="kpi-card__label">Faturamento Mês</span>
+            <span class="kpi-card__label">Faturamento Bruto</span>
             <span class="kpi-card__value" id="kpiRevenueMonth">R$ 0,00</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="compare-strip" id="compareStrip">
+        <div class="compare-chip"><span>Receita vs período anterior</span><strong id="cmpRevenue">--</strong></div>
+        <div class="compare-chip"><span>Pedidos vs período anterior</span><strong id="cmpOrders">--</strong></div>
+        <div class="compare-chip"><span>Ticket médio vs período anterior</span><strong id="cmpAvgTicket">--</strong></div>
+        <div class="compare-chip"><span>Cancelamento vs período anterior</span><strong id="cmpCancelRate">--</strong></div>
+      </div>
+
+      <!-- KPI Cards - Advanced -->
+      <div class="kpis kpis--secondary" id="kpiCardsSecondary">
+        <div class="kpi-card kpi-card--soft">
+          <div class="kpi-card__icon" style="background:rgba(27,94,32,.1);color:#1B5E20;"><i class="fas fa-check-double"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Taxa de Entrega</span>
+            <span class="kpi-card__value" id="kpiDeliveryRate">0%</span>
+          </div>
+        </div>
+        <div class="kpi-card kpi-card--soft">
+          <div class="kpi-card__icon" style="background:rgba(229,57,53,.1);color:#E53935;"><i class="fas fa-ban"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Taxa de Cancelamento</span>
+            <span class="kpi-card__value" id="kpiCancelRate">0%</span>
+          </div>
+        </div>
+        <div class="kpi-card kpi-card--soft">
+          <div class="kpi-card__icon" style="background:rgba(33,150,243,.1);color:#2196F3;"><i class="fas fa-user-clock"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Clientes Ativos no Período</span>
+            <span class="kpi-card__value" id="kpiActiveClientsMonth">0</span>
+          </div>
+        </div>
+        <div class="kpi-card kpi-card--soft">
+          <div class="kpi-card__icon" style="background:rgba(255,152,0,.1);color:#FF9800;"><i class="fas fa-fire"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Horário de Pico</span>
+            <span class="kpi-card__value" id="kpiPeakHour">--:--</span>
           </div>
         </div>
       </div>
@@ -112,12 +174,70 @@
       <!-- Charts -->
       <div class="charts-row">
         <div class="chart-card">
-          <h3>Faturamento - Últimos 7 dias</h3>
+          <h3>Faturamento Diário no Período</h3>
           <canvas id="chartRevenue"></canvas>
         </div>
         <div class="chart-card">
-          <h3>Pedidos por Status</h3>
+          <h3>Pedidos por Status no Período</h3>
           <canvas id="chartStatus"></canvas>
+        </div>
+      </div>
+
+      <!-- Operational Reports -->
+      <div class="charts-row charts-row--triple">
+        <div class="chart-card">
+          <h3>Pedidos por Hora</h3>
+          <canvas id="chartHourlyOrders"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Tipos de Entrega</h3>
+          <canvas id="chartDeliveryTypes"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Resumo por Status</h3>
+          <div class="status-summary" id="statusSummary"></div>
+        </div>
+      </div>
+
+      <div class="charts-row charts-row--triple">
+        <div class="chart-card">
+          <h3>Pedidos por Dia da Semana</h3>
+          <canvas id="chartWeekdayOrders"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Faturamento Acumulado</h3>
+          <canvas id="chartRevenueCumulative"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Formas de Pagamento</h3>
+          <canvas id="chartPaymentMethods"></canvas>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:24px;">
+        <div class="card__header"><h3>Insights do Período</h3></div>
+        <div class="card__body card__body--padded" id="businessInsights"></div>
+      </div>
+
+      <!-- Rankings -->
+      <div class="charts-row charts-row--equal">
+        <div class="card">
+          <div class="card__header"><h3>Top 5 Produtos</h3></div>
+          <div class="card__body">
+            <table class="table">
+              <thead><tr><th>Produto</th><th>Qtd</th><th>Faturamento</th></tr></thead>
+              <tbody id="topProductsBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card__header"><h3>Top 5 Clientes</h3></div>
+          <div class="card__body">
+            <table class="table">
+              <thead><tr><th>Cliente</th><th>Pedidos</th><th>Total</th></tr></thead>
+              <tbody id="topClientsBody"></tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -131,11 +251,22 @@
           </table>
         </div>
       </div>
+
+      <div class="card" style="margin-top:16px;">
+        <div class="card__header"><h3>Performance de Popups Promocionais</h3></div>
+        <div class="card__body">
+          <table class="table">
+            <thead><tr><th>Promoção</th><th>Visualizações</th><th>Cliques</th><th>Conversões</th><th>CTR</th><th>Taxa Conversão</th></tr></thead>
+            <tbody id="promotionPerfBody"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <!-- ====== PEDIDOS PAGE ====== -->
     <div class="page" id="pagePedidos">
       <div class="page__toolbar">
+        <button class="btn btn--primary" id="btnNewTableOrder"><i class="fas fa-plus-circle"></i> Novo Pedido Mesa</button>
         <div class="filter-group">
           <select id="filterStatus">
             <option value="">Todos os Status</option>
@@ -153,7 +284,7 @@
       <div class="card">
         <div class="card__body">
           <table class="table">
-            <thead><tr><th>#</th><th>Cliente</th><th>Itens</th><th>Total</th><th>Entrega</th><th>Status</th><th>Data</th><th>Ações</th></tr></thead>
+            <thead><tr><th>#</th><th>Cliente</th><th>Itens</th><th>Total</th><th>Entrega</th><th>Status</th><th>Data</th><th>Tempo</th><th>Ações</th></tr></thead>
             <tbody id="ordersTableBody"></tbody>
           </table>
           <div class="empty-state hidden" id="ordersEmpty"><i class="fas fa-inbox"></i><p>Nenhum pedido encontrado</p></div>
@@ -195,13 +326,228 @@
       </div>
     </div>
 
+    <!-- ====== ENTREGA PAGE ====== -->
+    <div class="page" id="pageEntrega">
+      <div class="delivery-layout">
+        <div class="delivery-map-wrap">
+          <div id="deliveryMap" class="delivery-map"></div>
+          <div class="delivery-map-legend" id="mapLegend"></div>
+        </div>
+        <div class="delivery-zones-panel">
+          <div class="card">
+            <div class="card__header delivery-zones-header">
+              <h3><i class="fas fa-map-marked-alt"></i> Regiões de Entrega</h3>
+              <button class="btn btn--primary btn--sm" id="btnAddZone"><i class="fas fa-plus"></i> Nova Região</button>
+            </div>
+            <div class="card__body" id="zonesList">
+              <div class="empty-state"><i class="fas fa-map-marked-alt"></i><p>Nenhuma região carregada</p></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== PROMOCOES PAGE ====== -->
+    <div class="page" id="pagePromocoes">
+      <div class="promotions-layout">
+        <div class="card">
+          <div class="card__header promotions-header">
+            <h3><i class="fas fa-bullhorn"></i> Criar / Editar Popup Promocional</h3>
+            <button class="btn btn--outline-sm" id="btnResetPromotionForm"><i class="fas fa-eraser"></i> Limpar</button>
+          </div>
+          <div class="card__body card__body--padded">
+            <form id="promotionForm" class="promotion-form">
+              <input type="hidden" id="promotionId">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionNome">Nome da Campanha</label>
+                  <input type="text" id="promotionNome" placeholder="Ex.: Quarta da Pizza" required>
+                </div>
+                <div class="form-group">
+                  <label for="promotionTipo">Tipo</label>
+                  <select id="promotionTipo" required>
+                    <option value="general">Geral</option>
+                    <option value="daily">Promoção do Dia</option>
+                    <option value="weekly">Promoção da Semana</option>
+                    <option value="first_login">Primeiro Login</option>
+                    <option value="first_order">Primeiro Pedido</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionTitulo">Título do Popup</label>
+                  <input type="text" id="promotionTitulo" placeholder="Ex.: Hoje tem 30% OFF" required>
+                </div>
+                <div class="form-group">
+                  <label for="promotionDiscount">Desconto (%)</label>
+                  <input type="number" id="promotionDiscount" min="0" max="100" step="0.01" placeholder="Ex.: 20">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="promotionDescricao">Descrição</label>
+                <textarea id="promotionDescricao" rows="2" placeholder="Descreva a oferta de forma chamativa" required></textarea>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionOriginalPrice">Valor Original (R$)</label>
+                  <input type="number" id="promotionOriginalPrice" min="0" step="0.01" placeholder="Ex.: 69.90">
+                </div>
+                <div class="form-group">
+                  <label for="promotionPromoPrice">Valor Promocional (R$)</label>
+                  <input type="number" id="promotionPromoPrice" min="0" step="0.01" placeholder="Ex.: 49.90">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="promotionRules">Regras da promoção</label>
+                <textarea id="promotionRules" rows="3" placeholder="Ex.: válido até 22h, não cumulativo, 1 uso por cliente"></textarea>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionCoupon">Cupom</label>
+                  <input type="text" id="promotionCoupon" placeholder="Ex.: PIZZA20" maxlength="40">
+                </div>
+                <div class="form-group">
+                  <label for="promotionImage">URL da imagem</label>
+                  <input type="url" id="promotionImage" placeholder="https://...">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionProductId">ID Produto (botão ir direto)</label>
+                  <input type="number" id="promotionProductId" min="1" step="1" placeholder="Ex.: 12">
+                </div>
+                <div class="form-group">
+                  <label for="promotionButtonText">Texto do botão</label>
+                  <input type="text" id="promotionButtonText" placeholder="Ex.: Quero esse agora" value="Ver Produto">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionDateStart">Data início</label>
+                  <input type="date" id="promotionDateStart">
+                </div>
+                <div class="form-group">
+                  <label for="promotionDateEnd">Data fim</label>
+                  <input type="date" id="promotionDateEnd">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionTimeStart">Hora início</label>
+                  <input type="time" id="promotionTimeStart" value="00:00">
+                </div>
+                <div class="form-group">
+                  <label for="promotionTimeEnd">Hora fim</label>
+                  <input type="time" id="promotionTimeEnd" value="23:59">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>Dias da semana</label>
+                <div class="promo-days" id="promotionDays">
+                  <label><input type="checkbox" value="0"> Dom</label>
+                  <label><input type="checkbox" value="1"> Seg</label>
+                  <label><input type="checkbox" value="2"> Ter</label>
+                  <label><input type="checkbox" value="3"> Qua</label>
+                  <label><input type="checkbox" value="4"> Qui</label>
+                  <label><input type="checkbox" value="5"> Sex</label>
+                  <label><input type="checkbox" value="6"> Sáb</label>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionDelay">Tempo para aparecer (segundos)</label>
+                  <input type="number" id="promotionDelay" min="0" step="1" value="3">
+                </div>
+                <div class="form-group">
+                  <label for="promotionCooldown">Repetir após fechar (minutos)</label>
+                  <input type="number" id="promotionCooldown" min="0" step="1" value="180">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <label class="switch-label">
+                  <input type="checkbox" id="promotionAtiva" checked>
+                  <span class="switch"></span> Popup ativo
+                </label>
+                <label class="switch-label">
+                  <input type="checkbox" id="promotionHighlight">
+                  <span class="switch"></span> Destaque visual forte
+                </label>
+              </div>
+
+              <div class="form-actions">
+                <button type="button" class="btn btn--outline-sm" id="btnDeletePromotion" style="display:none;"><i class="fas fa-trash"></i> Excluir</button>
+                <button type="submit" class="btn btn--primary" id="btnSavePromotion"><i class="fas fa-save"></i> Salvar Promoção</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card__header"><h3><i class="fas fa-list"></i> Promoções Cadastradas</h3></div>
+          <div class="card__body">
+            <table class="table">
+              <thead><tr><th>Campanha</th><th>Tipo</th><th>Cupom</th><th>Agenda</th><th>Status</th><th>Ações</th></tr></thead>
+              <tbody id="promotionsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ====== CONFIG PAGE ====== -->
     <div class="page" id="pageConfig">
-      <div class="config-grid" id="configGrid">
-        <!-- Populated by JS -->
-      </div>
-      <div class="config-actions">
-        <button class="btn btn--primary" id="btnSaveConfig"><i class="fas fa-save"></i> Salvar Configurações</button>
+      <div class="config-layout">
+        <!-- Sidebar -->
+        <aside class="config-sidebar">
+          <div class="config-sidebar__header">
+            <h3><i class="fas fa-cog"></i> Configurações</h3>
+          </div>
+          <nav class="config-nav" id="configNav">
+            <!-- Apreendidas dinamicamente pelos JS -->
+          </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="config-main">
+          <header class="config-header">
+            <div class="config-header__info">
+              <h2 id="configSectionTitle">Configurações</h2>
+              <p id="configSectionDesc" class="config-header__desc">Configure os detalhes da sua pizzaria</p>
+            </div>
+            <div class="config-header__actions">
+              <button class="btn btn--outline-sm" id="btnCancelConfig"><i class="fas fa-times"></i> Descartar</button>
+              <button class="btn btn--primary" id="btnSaveConfig"><i class="fas fa-save"></i> Salvar</button>
+            </div>
+          </header>
+
+          <!-- Campos dinâmicos -->
+          <div class="config-form" id="configForm">
+            <!-- Populate dinamicamente -->
+          </div>
+
+          <!-- Preview (para cores) -->
+          <div class="config-preview hidden" id="configPreview">
+            <h3>Pré-visualização</h3>
+            <div class="preview-demo" id="previewDemo"></div>
+          </div>
+
+          <!-- Status -->
+          <div class="config-status hidden" id="configStatus">
+            <span id="configStatusText"></span>
+          </div>
+        </main>
       </div>
     </div>
   </main>
@@ -276,9 +622,119 @@
   </div>
 </div>
 
+<!-- ==================== NEW TABLE ORDER MODAL ==================== -->
+<div class="modal-overlay hidden" id="tableOrderModal">
+  <div class="modal modal--form">
+    <div class="modal__header">
+      <h2><i class="fas fa-utensils"></i> Novo Pedido de Mesa</h2>
+      <button class="modal__close" data-close="tableOrderModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <form id="tableOrderForm">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="tableOrderMesa">Mesa</label>
+            <input type="text" id="tableOrderMesa" placeholder="Ex.: 12" required>
+          </div>
+          <div class="form-group">
+            <label for="tableOrderCliente">Nome do cliente (opcional)</label>
+            <input type="text" id="tableOrderCliente" placeholder="Nome na mesa">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="tableOrderPayment">Pagamento</label>
+            <select id="tableOrderPayment" required>
+              <option value="local_dinheiro">Dinheiro</option>
+              <option value="local_cartao">Cartão</option>
+              <option value="local_pix">Pix</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="tableOrderStatus">Status inicial</label>
+            <select id="tableOrderStatus" required>
+              <option value="pendente">Pendente</option>
+              <option value="confirmado" selected>Confirmado</option>
+              <option value="preparando">Preparando</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="local-order-items-builder">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="tableOrderProduct">Adicionar item</label>
+              <select id="tableOrderProduct"></select>
+            </div>
+            <div class="form-group local-order-qty">
+              <label for="tableOrderQty">Qtd</label>
+              <input type="number" id="tableOrderQty" min="1" value="1">
+            </div>
+            <div class="form-group local-order-add-wrap">
+              <button type="button" class="btn btn--outline-sm" id="btnAddTableItem"><i class="fas fa-plus"></i> Adicionar</button>
+            </div>
+          </div>
+
+          <div class="local-order-items" id="tableOrderItemsList"></div>
+          <div class="local-order-total">Total: <strong id="tableOrderTotal">R$ 0,00</strong></div>
+        </div>
+
+        <div class="form-group">
+          <label for="tableOrderObs">Observações</label>
+          <textarea id="tableOrderObs" rows="2" placeholder="Ex.: sem cebola, aniversário, etc."></textarea>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="btn btn--outline-sm" data-close="tableOrderModal">Cancelar</button>
+          <button type="submit" class="btn btn--primary" id="btnSaveTableOrder"><i class="fas fa-save"></i> Criar Pedido</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== DELIVERY ZONE MODAL ==================== -->
+<div class="modal-overlay hidden" id="zoneFormModal">
+  <div class="modal modal--form">
+    <div class="modal__header">
+      <h2 id="zoneFormTitle"><i class="fas fa-map-marked-alt"></i> Nova Região</h2>
+      <button class="modal__close" data-close="zoneFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <form id="zoneForm">
+        <input type="hidden" id="zoneId">
+        <div class="form-group">
+          <label for="zoneNome">Nome da região</label>
+          <input type="text" id="zoneNome" required>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="zoneRaio">Raio (km)</label>
+            <input type="number" id="zoneRaio" step="0.1" min="0.1" required>
+          </div>
+          <div class="form-group">
+            <label for="zoneTaxa">Taxa de entrega (R$)</label>
+            <input type="number" id="zoneTaxa" step="0.01" min="0" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="zonePrazo">Prazo estimado</label>
+          <input type="text" id="zonePrazo" placeholder="Ex.: 30-45 min" required>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn--outline-sm" data-close="zoneFormModal">Cancelar</button>
+          <button type="submit" class="btn btn--primary">Salvar Região</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
 <!-- Toast -->
 <div class="toast hidden" id="toast"></div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="admin.js"></script>
 </body>
 </html>
