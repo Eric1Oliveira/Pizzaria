@@ -24,7 +24,7 @@
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-full: 999px;
-  --font: 'Poppins', -apple-system, sans-serif;
+  --font: 'Montserrat', -apple-system, sans-serif;
   --sidebar-w: 250px;
   --transition: .2s ease;
 }
@@ -75,7 +75,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 .login-card__logo { text-align: center; margin-bottom: 30px; }
 .login-card__logo span { font-size: 2.5rem; }
-.login-card__logo h1 { font-size: 1.3rem; color: var(--text); margin-top: 8px; }
+.login-card__logo h1 { font-size: 1.3rem; color: var(--primary); margin-top: 8px; }
 .login-card__logo p { font-size: .85rem; color: var(--text-muted); }
 .login-error { color: var(--red); font-size: .82rem; text-align: center; margin-top: 12px; }
 

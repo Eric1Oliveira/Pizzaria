@@ -6,7 +6,7 @@
   <title>Casa José Silva - Delivery Premium</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75'>🍕</text></svg>">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Montserrat:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
@@ -19,7 +19,7 @@
     <div class="splash__logo">
       <div class="splash__icon">🍕</div>
       <div class="splash__name" id="restaurantName">CASA JOSÉ SILVA</div>
-      <div class="splash__sub" id="restaurantSubtitle">empório &amp; café</div>
+      <div class="splash__sub" id="restaurantSubtitle">pizzaria &amp; restaurante</div>
     </div>
     <div class="splash__status" id="statusBar">
       <span class="status-dot"></span>
@@ -59,7 +59,7 @@
     <button class="topbar__btn" id="btnBackToHome" aria-label="Voltar"><i class="fas fa-arrow-left"></i></button>
     <div class="topbar__brand">
       <span class="topbar__name" id="menuLogoMain">CASA JOSÉ SILVA</span>
-      <span class="topbar__sub" id="menuLogoSub">empório &amp; café</span>
+      <span class="topbar__sub" id="menuLogoSub">pizzaria &amp; restaurante</span>
     </div>
     <div class="topbar__right">
       <button class="topbar__btn" id="btnSearch" aria-label="Buscar"><i class="fas fa-search"></i></button>
@@ -231,17 +231,20 @@
   </div>
 </aside>
 
-<!-- ==================== ORDERS PAGE ==================== -->
-<section class="orders-page hidden" id="ordersPage">
-  <header class="topbar">
-    <button class="topbar__btn" id="btnBackToHome2"><i class="fas fa-arrow-left"></i></button>
-    <div class="topbar__brand"><span class="topbar__name">Meus Pedidos</span></div>
-    <div class="topbar__right"></div>
-  </header>
-  <div class="orders-container" id="ordersList">
-    <div class="orders__empty"><i class="fas fa-inbox"></i><p>Nenhum pedido encontrado.</p></div>
+<!-- ==================== ORDERS MODAL ==================== -->
+<div class="modal-overlay hidden" id="ordersModal">
+  <div class="modal modal--orders">
+    <div class="modal__header">
+      <h2><i class="fas fa-clipboard-list"></i> Meus Pedidos</h2>
+      <button class="modal__close" data-close="ordersModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <div class="orders-container" id="ordersList">
+        <div class="orders__empty"><i class="fas fa-inbox"></i><p>Nenhum pedido encontrado.</p></div>
+      </div>
+    </div>
   </div>
-</section>
+</div>
 
 <!-- ==================== MODALS ==================== -->
 

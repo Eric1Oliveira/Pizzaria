@@ -53,7 +53,6 @@ const $$ = (sel) => document.querySelectorAll(sel);
 // Pages
 const splashScreen = $('splashScreen');
 const menuPage = $('menuPage');
-const ordersPage = $('ordersPage');
 
 const DEFAULT_SCHEDULE = {
   sales_open_days: '0,2,3,4,5,6',
@@ -363,7 +362,7 @@ function getAvailabilityTone(reason) {
 //  NAVIGATION
 // ============================================================
 function showPage(page) {
-  [splashScreen, menuPage, ordersPage].forEach(p => p.classList.add('hidden'));
+  [splashScreen, menuPage].forEach(p => p.classList.add('hidden'));
   page.classList.remove('hidden');
   window.scrollTo(0, 0);
 }
@@ -384,13 +383,12 @@ $('btnFazerPedido').addEventListener('click', async () => {
 });
 $('btnMeusPedidos').addEventListener('click', () => {
   if (!currentUser) { openModal('loginModal'); return; }
-  showPage(ordersPage); loadOrders();
+  openModal('ordersModal'); loadOrders();
 });
 $('btnMinhaConta').addEventListener('click', () => {
   if (currentUser) { handleLogout(); } else { openModal('loginModal'); }
 });
 $('btnBackToHome').addEventListener('click', () => showPage(splashScreen));
-$('btnBackToHome2').addEventListener('click', () => showPage(splashScreen));
 $('btnAdminPanel').addEventListener('click', () => {
   if (!isAdmin) return;
   window.location.href = 'admin.html';

@@ -29,8 +29,8 @@
   --radius-lg: 16px;
   --radius-xl: 24px;
   --radius-full: 999px;
-  --font-display: 'Playfair Display', Georgia, serif;
-  --font-body: 'Poppins', -apple-system, sans-serif;
+  --font-display: 'Cormorant Garamond', Georgia, serif;
+  --font-body: 'Montserrat', -apple-system, sans-serif;
   --topbar-h: 60px;
   --transition: .25s cubic-bezier(.4,0,.2,1);
 }
@@ -208,14 +208,14 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   font-size: clamp(2rem, 4.2vw, 3rem);
   font-weight: 700;
   letter-spacing: 3px;
-  color: var(--brown);
+  color: var(--gold);
 }
 
 .splash__sub {
   font-size: .78rem;
   letter-spacing: 4px;
   text-transform: uppercase;
-  color: var(--text-light);
+  color: var(--gold);
   font-weight: 600;
 }
 
@@ -238,6 +238,11 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   background: #4CAF50;
   box-shadow: 0 0 0 0 rgba(76,175,80,.5);
   animation: pulse 1.8s infinite;
+}
+
+.status-dot.closed {
+  background: #F44336;
+  box-shadow: 0 0 0 0 rgba(244,67,54,.5);
 }
 
 .splash__actions {
@@ -335,14 +340,14 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   font-family: var(--font-display);
   font-size: 1.05rem;
   font-weight: 700;
-  color: var(--brown);
+  color: var(--gold);
   letter-spacing: 1px;
 }
 
 .topbar__sub {
   font-size: .6rem;
   letter-spacing: 2px;
-  color: var(--text-muted);
+  color: var(--gold);
   text-transform: uppercase;
   font-weight: 500;
 }
@@ -663,7 +668,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 
 .menu-hero {
-  background: linear-gradient(135deg, var(--brown) 0%, #2a2a2a 50%, var(--green-dark) 100%);
+  background: linear-gradient(135deg, var(--brown) 0%, #2a2a2a 50%, #3a3020 100%);
   color: var(--white);
   padding: 32px 16px;
   text-align: center;
@@ -1667,17 +1672,13 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 
 /* ============================================================
-   ORDERS PAGE
+   ORDERS MODAL
    ============================================================ */
-.orders-page {
-  min-height: 100vh; 
-  background: linear-gradient(135deg, rgba(255,255,255,.5), rgba(248,246,240,.5));
-}
+.modal--orders { max-width: 600px; }
 
 .orders-container { 
-  padding: 24px 16px; 
-  max-width: 700px; 
-  margin: 0 auto; 
+  padding: 0; 
+  max-width: 100%; 
 }
 
 .orders__empty {
