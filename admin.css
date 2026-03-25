@@ -74,7 +74,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   box-shadow: var(--shadow-md);
 }
 .login-card__logo { text-align: center; margin-bottom: 30px; }
-.login-card__logo span { font-size: 2.5rem; }
+.login-card__logo-img { width: 80px; height: 80px; object-fit: contain; }
 .login-card__logo h1 { font-size: 1.3rem; color: var(--primary); margin-top: 8px; }
 .login-card__logo p { font-size: .85rem; color: var(--text-muted); }
 .login-error { color: var(--red); font-size: .82rem; text-align: center; margin-top: 12px; }
@@ -95,7 +95,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   display: flex; align-items: center; gap: 12px;
   padding: 20px 16px; border-bottom: 1px solid rgba(255,255,255,.08);
 }
-.sidebar__logo { font-size: 1.8rem; }
+.sidebar__logo-img { width: 40px; height: 40px; object-fit: contain; }
 .sidebar__brand { color: var(--primary); font-weight: 700; font-size: .95rem; }
 .sidebar__sub { color: var(--sidebar-text); font-size: .7rem; letter-spacing: 1px; }
 
