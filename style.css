@@ -1271,8 +1271,8 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 
 .category-header__title {
-  font-family: var(--font-display); 
-  font-size: 1.35rem;
+  font-family: var(--font-body); 
+  font-size: 1.8rem;
   font-weight: 700; 
   color: var(--brown);
 }
