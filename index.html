@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Casa José Silva - Delivery Premium</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75'>🍕</text></svg>">
+  <link rel="icon" href="logo.png" type="image/png">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Montserrat:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
@@ -17,7 +17,9 @@
   <div class="splash__bg"></div>
   <div class="splash__content">
     <div class="splash__logo">
-      <div class="splash__icon">🍕</div>
+      <div class="splash__icon-ring">
+        <img src="logo.png" alt="Logo" class="splash__icon-img">
+      </div>
       <div class="splash__name" id="restaurantName">CASA JOSÉ SILVA</div>
       <div class="splash__sub" id="restaurantSubtitle">pizzaria &amp; restaurante</div>
     </div>
@@ -71,10 +73,14 @@
   </header>
 
   <!-- Hero Banner -->
-  <div class="menu-hero">
-    <div class="menu-hero__content">
-      <h1 class="menu-hero__title">Cardápio Premium</h1>
-      <p class="menu-hero__subtitle">Experiência gastronômica de luxo</p>
+  <div class="menu-hero" id="menuHero">
+    <img src="Banner.png" alt="Banner" class="menu-hero__bg">
+    <div class="menu-hero__content" id="btnScrollCardapio" style="cursor:pointer">
+      <h1 class="menu-hero__title">Nosso Cardápio</h1>
+      <p class="menu-hero__subtitle">Descubra nossos sabores</p>
+      <div class="menu-hero__arrow" aria-label="Ver cardápio">
+        <i class="fas fa-chevron-down"></i>
+      </div>
     </div>
   </div>
 
@@ -150,7 +156,9 @@
     <h2><i class="fas fa-shopping-bag"></i> Seu Pedido</h2>
     <button class="cart__close" id="btnCloseCart"><i class="fas fa-times"></i></button>
   </div>
-  <div class="cart__scroll" id="cartScroll">
+  <div class="cart__scroll" id="cartScroll" style="position:relative;">
+  <div class="cart__scroll-hint cart__scroll-hint--top" id="cartScrollTop"></div>
+  <div class="cart__scroll-hint cart__scroll-hint--bottom visible" id="cartScrollBottom"></div>
   <div class="cart__body" id="cartItems">
     <div class="cart__empty"><i class="fas fa-shopping-basket"></i><p>Seu carrinho está vazio</p></div>
   </div>

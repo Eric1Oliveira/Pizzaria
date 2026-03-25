@@ -132,6 +132,7 @@ function findDeliveryZoneForAddress(bairroValue) {
 function getCurrentDeliveryFee() {
   if (deliveryType !== 'delivery') return 0;
   const bairro = $('addrBairro')?.value?.trim() || '';
+  if (!bairro) return null; // no address yet
   const matchedZone = findDeliveryZoneForAddress(bairro);
   if (matchedZone) {
     const zoneFee = Number(matchedZone.taxa_entrega || 0);
@@ -212,7 +213,11 @@ async function loadRuntimeConfig() {
           'dinner_categories',
           'closed_between_start',
           'closed_between_end',
-          'schedule_message_closed'
+          'schedule_message_closed',
+          'instagram_url',
+          'whatsapp_number',
+          'facebook_url',
+          'email'
         ]),
       12000
     );
@@ -389,6 +394,22 @@ $('btnMinhaConta').addEventListener('click', () => {
   if (currentUser) { handleLogout(); } else { openModal('loginModal'); }
 });
 $('btnBackToHome').addEventListener('click', () => showPage(splashScreen));
+$('btnScrollCardapio').addEventListener('click', () => {
+  const hero = $('menuHero');
+  const isMobile = window.innerWidth <= 768;
+  if (isMobile && !hero.classList.contains('menu-hero--expanded')) {
+    hero.classList.add('menu-hero--expanded');
+    setTimeout(() => {
+      hero.classList.remove('menu-hero--expanded');
+      setTimeout(() => {
+        $('catNav').scrollIntoView({ behavior: 'smooth' });
+      }, 500);
+    }, 1800);
+  } else {
+    hero.classList.remove('menu-hero--expanded');
+    $('catNav').scrollIntoView({ behavior: 'smooth' });
+  }
+});
 $('btnAdminPanel').addEventListener('click', () => {
   if (!isAdmin) return;
   window.location.href = 'admin.html';
@@ -554,6 +575,14 @@ async function loadProducts() {
 function buildCategoryTabs() {
   const scroll = $('catNavScroll');
   const categories = [...new Set(products.map(p => p.categoria))];
+
+  // Sort categories: those with available products first
+  categories.sort((a, b) => {
+    const aHasAvail = products.filter(p => p.categoria === a).some(p => getProductAvailability(p).canBuy) ? 0 : 1;
+    const bHasAvail = products.filter(p => p.categoria === b).some(p => getProductAvailability(p).canBuy) ? 0 : 1;
+    return aHasAvail - bHasAvail;
+  });
+
   scroll.innerHTML = '<button class="cat-tab active" data-category="todos">Todos</button>';
   categories.forEach(cat => {
     const btn = document.createElement('button');
@@ -599,14 +628,28 @@ function renderProducts() {
     return;
   }
 
+  // Sort: available products first, then unavailable
+  filtered.sort((a, b) => {
+    const aAvail = getProductAvailability(a).canBuy ? 0 : 1;
+    const bAvail = getProductAvailability(b).canBuy ? 0 : 1;
+    return aAvail - bAvail;
+  });
+
   const groups = {};
   filtered.forEach(p => {
     if (!groups[p.categoria]) groups[p.categoria] = [];
     groups[p.categoria].push(p);
   });
 
+  // Sort category groups: categories with at least one available product first
+  const sortedEntries = Object.entries(groups).sort((a, b) => {
+    const aHasAvail = a[1].some(p => getProductAvailability(p).canBuy) ? 0 : 1;
+    const bHasAvail = b[1].some(p => getProductAvailability(p).canBuy) ? 0 : 1;
+    return aHasAvail - bHasAvail;
+  });
+
   let html = '<div class="products__grid">';
-  for (const [cat, items] of Object.entries(groups)) {
+  for (const [cat, items] of sortedEntries) {
     html += `<div class="category-header"><span class="category-header__title">${formatCategory(cat)}</span><span class="category-header__count">${items.length} itens</span></div>`;
     items.forEach(p => {
       const inCart = cart.find(c => c.id === p.id);
@@ -912,6 +955,54 @@ function saveCart() {
   updateCartUI();
 }
 
+// Animate counting for money values (R$ X,XX)
+function animateValue(el, newText) {
+  if (!el || el.textContent === newText) return;
+  const oldVal = parseMoney(el.textContent);
+  const newVal = parseMoney(newText);
+  if (isNaN(oldVal) || isNaN(newVal) || oldVal === newVal) {
+    el.textContent = newText;
+    return;
+  }
+  const duration = 400;
+  const start = performance.now();
+  const diff = newVal - oldVal;
+  function tick(now) {
+    const elapsed = now - start;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+    const current = oldVal + diff * eased;
+    el.textContent = formatMoney(current);
+    if (progress < 1) requestAnimationFrame(tick);
+    else el.textContent = newText;
+  }
+  requestAnimationFrame(tick);
+}
+
+// Animate integer badge count
+function animateBadge(el, newCount) {
+  if (!el) return;
+  const oldCount = parseInt(el.textContent) || 0;
+  if (oldCount === newCount) return;
+  const duration = 300;
+  const start = performance.now();
+  const diff = newCount - oldCount;
+  function tick(now) {
+    const elapsed = now - start;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    el.textContent = Math.round(oldCount + diff * eased);
+    if (progress < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+function parseMoney(str) {
+  if (!str) return NaN;
+  const cleaned = str.replace(/[^\d,.-]/g, '').replace(',', '.');
+  return parseFloat(cleaned);
+}
+
 function normalizeCouponCode(code) {
   return (code || '').trim().toUpperCase();
 }
@@ -929,7 +1020,9 @@ function clearCouponState() {
 
 function getCartPricing() {
   const subtotal = cart.reduce((sum, item) => sum + (parsePriceValue(item.preco) * Number(item.qty || 0)), 0);
-  const fee = getCurrentDeliveryFee();
+  const rawFee = getCurrentDeliveryFee();
+  const fee = rawFee === null ? 0 : rawFee;
+  const feeKnown = rawFee !== null;
   let discount = 0;
 
   if (appliedCoupon) {
@@ -942,7 +1035,7 @@ function getCartPricing() {
   }
 
   const total = Math.max(0, subtotal - discount + fee);
-  return { subtotal, fee, discount, total };
+  return { subtotal, fee, discount, total, feeKnown };
 }
 
 async function validateCouponCode(rawCode, silent = false) {
@@ -1037,9 +1130,9 @@ function updateCartUI() {
   $('btnRemoveCoupon').classList.toggle('hidden', !appliedCoupon?.code);
 
   // Badges
-  $('cartBadgeMenu').textContent = count;
-  $('fabCartBadge').textContent = count;
-  $('fabCartTotal').textContent = formatMoney(total);
+  animateBadge($('cartBadgeMenu'), count);
+  animateBadge($('fabCartBadge'), count);
+  animateValue($('fabCartTotal'), formatMoney(total));
   const fab = $('fabCart');
   if (count > 0) fab.classList.remove('hidden'); else fab.classList.add('hidden');
 
@@ -1058,11 +1151,11 @@ function updateCartUI() {
             <button class="cart-item__qty-btn ${item.qty === 1 ? 'cart-item__qty-btn--remove' : ''}" data-id="${item.id}" data-action="minus">
               <i class="fas ${item.qty === 1 ? 'fa-trash-alt' : 'fa-minus'}"></i>
             </button>
-            <span class="cart-item__qty">${item.qty}</span>
+            <span class="cart-item__qty value-pop">${item.qty}</span>
             <button class="cart-item__qty-btn" data-id="${item.id}" data-action="plus"><i class="fas fa-plus"></i></button>
           </div>
         </div>
-        <span class="cart-item__total">${formatMoney(item.preco * item.qty)}</span>
+        <span class="cart-item__total value-pop">${formatMoney(item.preco * item.qty)}</span>
       </div>
     `).join('');
 
@@ -1075,11 +1168,17 @@ function updateCartUI() {
   }
 
   // Summary
-  $('cartSubtotal').textContent = formatMoney(subtotal);
-  $('cartDelivery').textContent = formatMoney(fee);
+  animateValue($('cartSubtotal'), formatMoney(subtotal));
+  if (pricing.feeKnown) {
+    $('cartDelivery').textContent = formatMoney(fee);
+    $('cartDelivery').style.color = '';
+  } else {
+    $('cartDelivery').textContent = 'Informe o bairro';
+    $('cartDelivery').style.color = 'var(--text-muted)';
+  }
   $('cartDiscount').textContent = '- ' + formatMoney(discount);
   $('cartDiscountLine').classList.toggle('hidden', discount <= 0);
-  $('cartTotal').textContent = formatMoney(total);
+  animateValue($('cartTotal'), formatMoney(total));
 
   const blockedItem = cart.find(item => Boolean(getCartItemBlockedReason(item)));
 
@@ -1108,6 +1207,30 @@ $('btnCartMenu').addEventListener('click', openCart);
 $('btnCloseCart').addEventListener('click', closeCart);
 $('cartOverlay').addEventListener('click', closeCart);
 $('fabCart').addEventListener('click', openCart);
+
+// --- Cart scroll indicators ---
+(function() {
+  const scrollEl = $('cartScroll');
+  const hintTop = $('cartScrollTop');
+  const hintBottom = $('cartScrollBottom');
+  if (!scrollEl || !hintTop || !hintBottom) return;
+
+  function updateScrollHints() {
+    const { scrollTop, scrollHeight, clientHeight } = scrollEl;
+    const canScroll = scrollHeight > clientHeight + 5;
+    hintTop.classList.toggle('visible', canScroll && scrollTop > 10);
+    hintBottom.classList.toggle('visible', canScroll && scrollTop + clientHeight < scrollHeight - 10);
+  }
+
+  scrollEl.addEventListener('scroll', updateScrollHints, { passive: true });
+  const obs = new MutationObserver(updateScrollHints);
+  obs.observe(scrollEl, { childList: true, subtree: true });
+  window.addEventListener('resize', updateScrollHints);
+  // Run on cart open
+  const origOpen = openCart;
+  openCart = function() { origOpen(); setTimeout(updateScrollHints, 50); };
+})();
+
 $('btnApplyCoupon')?.addEventListener('click', applyCouponFromInput);
 $('btnRemoveCoupon')?.addEventListener('click', () => {
   clearCouponState();
@@ -2083,6 +2206,7 @@ function showToast(msg, type = '') {
 // ============================================================
 (async function init() {
   await loadRuntimeConfig();
+  applyContactLinks();
   await loadDeliveryZones();
   updateStatus();
   await initAuth();
@@ -2090,4 +2214,42 @@ function showToast(msg, type = '') {
   updateCartUI();
   checkPaymentReturn();
 })();
+
+function applyContactLinks() {
+  const instaUrl = runtimeConfig['instagram_url'];
+  if (instaUrl) {
+    document.querySelectorAll('a[aria-label="Instagram"], .footer__social a[href*="instagram"], .contact-list a[href*="instagram"]').forEach(a => {
+      a.href = instaUrl;
+    });
+    const instaSpan = document.querySelector('.contact-list a[href*="instagram"] span');
+    if (instaSpan) {
+      try {
+        const handle = new URL(instaUrl).pathname.replace(/\//g, '');
+        if (handle) instaSpan.textContent = '@' + handle;
+      } catch(e) {}
+    }
+  }
+
+  const waNumber = runtimeConfig['whatsapp_number'];
+  if (waNumber) {
+    const clean = waNumber.replace(/\D/g, '');
+    document.querySelectorAll('a[href*="wa.me"]').forEach(a => {
+      a.href = 'https://wa.me/' + clean;
+    });
+  }
+
+  const fbUrl = runtimeConfig['facebook_url'];
+  if (fbUrl) {
+    document.querySelectorAll('a[href*="facebook"]').forEach(a => {
+      a.href = fbUrl;
+    });
+  }
+
+  const emailVal = runtimeConfig['email'];
+  if (emailVal) {
+    document.querySelectorAll('a[href*="mailto:"]').forEach(a => {
+      a.href = 'mailto:' + emailVal;
+    });
+  }
+}
 
