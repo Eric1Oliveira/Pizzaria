@@ -238,7 +238,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 
 .splash__name {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: clamp(1.8rem, 4vw, 2.6rem);
   font-weight: 700;
   letter-spacing: 4px;
@@ -384,7 +384,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 
 .topbar__name {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: 1.05rem;
   font-weight: 700;
   color: var(--gold);
@@ -547,7 +547,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 
 .promo-popup__content h3 {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: clamp(1.5rem, 2.5vw, 2.1rem);
   line-height: 1.1;
 }
@@ -660,7 +660,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 
   .cart__coupon {
     margin-bottom: 10px;
-    padding: 0;
+    padding: 0 22px;
   }
 
   .cart__coupon label {
@@ -789,7 +789,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 
 .menu-hero__title {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: 2.2rem;
   font-weight: 700;
   margin-bottom: 8px;
@@ -1009,7 +1009,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 
 .featured-card__name { 
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-weight: 700; 
   font-size: 1rem; 
   color: var(--brown); 
@@ -1037,7 +1037,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 
 .section-title {
-  padding: 0 16px; font-family: var(--font-display);
+  padding: 0 16px; font-family: var(--font-body);
   font-size: 1.4rem; font-weight: 700; color: var(--brown);
   margin-bottom: 20px; letter-spacing: .5px;
 }
@@ -1198,9 +1198,9 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 
 .product-card__name {
-  font-family: var(--font-display); 
+  font-family: var(--font-body); 
   font-weight: 800; 
-  font-size: 1.4rem;
+  font-size: 1.15rem;
   color: var(--brown); 
   margin-bottom: 6px;
   line-height: 1.25;
@@ -1393,7 +1393,6 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   scrollbar-color: rgba(197,165,90,.35) transparent;
   padding: 0 6px;
 }
-}
 
 .cart__scroll::-webkit-scrollbar {
   width: 5px;
@@ -1465,7 +1464,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 
 .cart__header h2 {
-  font-family: var(--font-display); 
+  font-family: var(--font-body); 
   font-size: 1.25rem;
   color: var(--brown); 
   display: flex; 
@@ -1640,11 +1639,10 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   60%  { transform: scale(1.15) translateY(-2px); opacity: 1; }
   100% { transform: scale(1) translateY(0); opacity: 1; }
 }
-}
 
 /* Cart Obs */
 .cart__obs { 
-  padding: 12px 22px; 
+  padding: 16px 22px; 
   border-top: 1px solid rgba(0,0,0,.05); 
 }
 
@@ -1865,7 +1863,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 /* Cart Footer */
 .cart__footer { 
   flex-shrink: 0;
-  padding: 16px; 
+  padding: 16px 22px; 
   border-top: 2px solid rgba(197,165,90,.15); 
   background: linear-gradient(135deg, rgba(255,255,255,.6), rgba(245,243,237,.6)); 
 }
@@ -2066,25 +2064,28 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   position: fixed; inset: 0; z-index: 2000;
   background: rgba(0,0,0,.5); backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center;
-  padding: 20px;
+  padding: 16px;
   animation: fadeIn .2s ease;
+  overflow: hidden;
 }
 .modal {
   background: var(--white); border-radius: var(--radius-lg);
-  width: 100%; max-width: 480px; max-height: 90vh;
+  width: 100%; max-width: min(480px, calc(100vw - 32px)); max-height: 90vh;
   overflow-y: auto; box-shadow: var(--shadow-xl);
   animation: scaleIn .25s ease;
   font-family: var(--font-body);
 }
 .modal--auth { max-width: 400px; }
-.modal--product { max-width: 500px; }
+.modal--product { max-width: min(500px, calc(100vw - 32px)); }
 .modal__header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 16px 20px; border-bottom: 1px solid rgba(0,0,0,.06);
   position: sticky; top: 0; background: var(--white); z-index: 1;
 }
+.modal--product .modal__header h2 { display: none; }
+.modal--product .modal__header { justify-content: flex-end; border-bottom: none; padding: 10px 14px; }
 .modal__header h2 {
-  font-family: var(--font-display); font-size: 1.1rem;
+  font-family: var(--font-body); font-size: 1.1rem;
   font-weight: 600; color: var(--brown);
   display: flex; align-items: center; gap: 8px;
 }
@@ -2164,14 +2165,16 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 /* ============================================================
    PRODUCT DETAIL MODAL
    ============================================================ */
-.product-detail { display: flex; flex-direction: column; gap: 16px; }
+.product-detail { display: flex; flex-direction: column; gap: 16px; overflow: hidden; }
+.product-detail__gallery { display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory; }
+.product-detail__gallery .product-detail__img { flex: 0 0 100%; scroll-snap-align: start; }
 .product-detail__img {
   width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover;
   border-radius: var(--radius-md);
   background: var(--cream-dark);
 }
-.product-detail__name { font-family: var(--font-display); font-size: 1.3rem; font-weight: 700; color: var(--brown); }
-.product-detail__desc { font-size: .9rem; color: var(--text-light); line-height: 1.5; }
+.product-detail__name { font-family: var(--font-body); font-size: 1.3rem; font-weight: 700; color: var(--brown); }
+.product-detail__desc { font-size: 1rem; color: var(--text-light); line-height: 1.6; }
 .product-detail__price { font-size: 1.3rem; font-weight: 700; color: var(--gold-dark); }
 .product-detail__actions {
   display: flex; align-items: center; gap: 16px;
@@ -2280,7 +2283,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 .success-overlay__content--wide { max-width: 400px; }
 .success-overlay__icon { font-size: 3.5rem; color: var(--gold); margin-bottom: 16px; }
-.success-overlay__content h2 { font-family: var(--font-display); color: var(--brown); margin-bottom: 8px; }
+.success-overlay__content h2 { font-family: var(--font-body); color: var(--brown); margin-bottom: 8px; }
 .success-overlay__content p { color: var(--text-light); font-size: .9rem; margin-bottom: 20px; line-height: 1.5; }
 
 /* PIX Key Box */
@@ -2961,6 +2964,16 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
     font-size: .79rem;
     padding: 8px 10px;
     border-radius: 10px;
+  }
+
+  .product-detail__actions {
+    flex-wrap: wrap;
+  }
+
+  .product-detail__actions .btn--lg {
+    min-width: 0;
+    font-size: .92rem;
+    padding: 13px 16px;
   }
 
   .product-card__add {

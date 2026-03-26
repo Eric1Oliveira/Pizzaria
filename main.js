@@ -714,7 +714,7 @@ function openProductDetail(id) {
   const availabilityTone = getAvailabilityTone(availability.reason);
   const inCart = cart.find(c => c.id === id);
   const qty = inCart ? inCart.qty : 1;
-  $('productModalTitle').textContent = p.nome;
+  $('productModalTitle').textContent = '';
   // Galeria/carrossel de mídias
   let galeria = '';
   if (Array.isArray(p.midias) && p.midias.length > 0) {
