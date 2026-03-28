@@ -285,7 +285,18 @@ function getScheduleContext() {
 
 function getProductAvailability(product) {
   if (!product?.disponivel) {
-    return { canBuy: false, reason: 'Indisponível no cardápio' };
+    const category = normalizeCategoryKey(product?.categoria);
+    const schedule = getScheduleContext();
+    const inLunch = categoryInSetByKey(schedule.lunch.categories, category);
+    const inDinner = categoryInSetByKey(schedule.dinner.categories, category);
+    if (inLunch && inDinner) {
+      return { canBuy: false, reason: `Indisponível — almoço (${cfg('lunch_start')} às ${cfg('lunch_end')}) e jantar (${cfg('dinner_start')} às ${cfg('dinner_end')})` };
+    } else if (inLunch) {
+      return { canBuy: false, reason: `Indisponível — disponível no almoço (${cfg('lunch_start')} às ${cfg('lunch_end')})` };
+    } else if (inDinner) {
+      return { canBuy: false, reason: `Indisponível — disponível no jantar (${cfg('dinner_start')} às ${cfg('dinner_end')})` };
+    }
+    return { canBuy: false, reason: 'Indisponível no momento' };
   }
 
   const schedule = getScheduleContext();
@@ -298,10 +309,10 @@ function getProductAvailability(product) {
   // BEBIDAS: sempre disponíveis se dia aberto e não estiver no intervalo
   if (alwaysBothPeriods) {
     if (!schedule.dayOpen) {
-      return { canBuy: false, reason: 'Fechado hoje' };
+      return { canBuy: false, reason: `Fechado hoje — almoço (${cfg('lunch_start')} às ${cfg('lunch_end')}) / jantar (${cfg('dinner_start')} às ${cfg('dinner_end')})` };
     }
     if (schedule.inBreak) {
-      return { canBuy: false, reason: 'Fechado entre 15h e 18h' };
+      return { canBuy: false, reason: `Intervalo — retorna às ${cfg('dinner_start')}` };
     }
     if (!schedule.activePeriod) {
       return { canBuy: false, reason: cfg('schedule_message_closed') || 'Fora do horário de atendimento' };
@@ -310,11 +321,15 @@ function getProductAvailability(product) {
   }
 
   if (!schedule.dayOpen) {
-    return { canBuy: false, reason: 'Fechado hoje' };
+    if (inLunchCatalog || lunchSupport) return { canBuy: false, reason: `Fechado hoje — disponível no almoço (${cfg('lunch_start')} às ${cfg('lunch_end')})` };
+    if (inDinnerCatalog) return { canBuy: false, reason: `Fechado hoje — disponível no jantar (${cfg('dinner_start')} às ${cfg('dinner_end')})` };
+    return { canBuy: false, reason: `Fechado hoje — almoço (${cfg('lunch_start')} às ${cfg('lunch_end')}) / jantar (${cfg('dinner_start')} às ${cfg('dinner_end')})` };
   }
 
   if (schedule.inBreak) {
-    return { canBuy: false, reason: 'Fechado entre 15h e 18h' };
+    if (inDinnerCatalog) return { canBuy: false, reason: `Intervalo — retorna às ${cfg('dinner_start')}` };
+    if (inLunchCatalog || lunchSupport) return { canBuy: false, reason: `Intervalo — disponível no almoço (${cfg('lunch_start')} às ${cfg('lunch_end')})` };
+    return { canBuy: false, reason: `Intervalo — retorna às ${cfg('dinner_start')}` };
   }
 
   if (!schedule.activePeriod) {
@@ -330,7 +345,7 @@ function getProductAvailability(product) {
   if (!categoryInSetByKey(schedule.activePeriod.categories, category)) {
     if (inDinnerCatalog) return { canBuy: false, reason: `Disponível no jantar (${cfg('dinner_start')} às ${cfg('dinner_end')})` };
     if (inLunchCatalog) return { canBuy: false, reason: `Disponível no almoço (${cfg('lunch_start')} às ${cfg('lunch_end')})` };
-    return { canBuy: false, reason: 'Indisponível neste período' };
+    return { canBuy: false, reason: `Indisponível neste período — almoço (${cfg('lunch_start')} às ${cfg('lunch_end')}) / jantar (${cfg('dinner_start')} às ${cfg('dinner_end')})` };
   }
 
   return { canBuy: true, reason: '' };
