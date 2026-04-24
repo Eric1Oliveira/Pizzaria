@@ -1,0 +1,1268 @@
+﻿<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Casa José Silva - Pizzaria &amp; Restaurante | Delivery em São Bernardo do Campo</title>
+  <meta name="description" content="Peça online pizzas, pratos e bebidas da Casa José Silva. Delivery e retirada em São Bernardo do Campo, SP. Cardápio completo com pagamento online.">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#1a1a1a">
+  <!-- Open Graph / WhatsApp / Facebook -->
+  <meta property="og:type" content="restaurant.restaurant">
+  <meta property="og:title" content="Casa José Silva — Pizzaria &amp; Restaurante">
+  <meta property="og:description" content="Pizzas artesanais, pratos do dia e delivery rápido em São Bernardo do Campo. Peça agora!">
+  <meta property="og:image" content="Banner.png">
+  <meta property="og:url" content="https://casajosesilva.com.br">
+  <meta property="og:locale" content="pt_BR">
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Casa José Silva — Pizzaria &amp; Restaurante">
+  <meta name="twitter:description" content="Delivery de pizza em São Bernardo do Campo. Peça online!">
+  <meta name="twitter:image" content="Banner.png">
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="logo.png">
+  <!-- Schema.org Restaurant -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Restaurant",
+    "name": "Casa José Silva",
+    "description": "Pizzaria e restaurante com delivery em São Bernardo do Campo",
+    "url": "https://casajosesilva.com.br",
+    "image": "Banner.png",
+    "telephone": "+5511916835853",
+    "email": "contato@emporiocasajosessilva.com.br",
+    "address": {
+      "@type": "PostalAddress",
+      "streetAddress": "Rua Banda, 733",
+      "addressLocality": "São Bernardo do Campo",
+      "addressRegion": "SP",
+      "addressCountry": "BR",
+      "postalCode": "09725-240"
+    },
+    "servesCuisine": ["Italiana", "Brasileira", "Pizza"],
+    "hasMap": "https://www.google.com/maps/search/?api=1&query=Rua+Banda%2C+733%2C+Jardim+do+Mar%2C+S%C3%A3o+Bernardo+do+Campo%2C+SP",
+    "openingHoursSpecification": [
+      { "@type": "OpeningHoursSpecification", "dayOfWeek": ["Sunday"], "opens": "18:00", "closes": "22:00" },
+      { "@type": "OpeningHoursSpecification", "dayOfWeek": ["Tuesday","Wednesday","Thursday"], "opens": "11:00", "closes": "22:00" },
+      { "@type": "OpeningHoursSpecification", "dayOfWeek": ["Friday","Saturday"], "opens": "11:00", "closes": "23:30" }
+    ],
+    "sameAs": [
+      "https://instagram.com/emporiocasajosessilva",
+      "https://wa.me/5511916835853"
+    ]
+  }
+  </script>
+  <!-- Preconnect para CDNs -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+  <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
+  <link rel="dns-prefetch" href="https://uufzqceljdkrnpgjotxw.supabase.co">
+  <link rel="icon" href="logo.png" type="image/png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Montserrat:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Leaflet CSS (admin map) - carregado aqui para evitar FOUC no admin -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+<div id="storeRoot">
+
+<!-- ==================== SPLASH SCREEN ==================== -->
+<section class="splash" id="splashScreen">
+  <div class="splash__bg"></div>
+  <div class="splash__content">
+    <div class="splash__logo">
+      <div class="splash__icon-ring">
+        <img src="logo.png" alt="Logo" class="splash__icon-img">
+      </div>
+      <div class="splash__name" id="restaurantName">CASA JOSÉ SILVA</div>
+      <div class="splash__sub" id="restaurantSubtitle">pizzaria &amp; restaurante</div>
+    </div>
+    <div class="splash__status" id="statusBar">
+      <span class="status-dot"></span>
+      <span class="status-text">Verificando...</span>
+    </div>
+    <div class="splash__actions">
+      <button class="btn btn--primary btn--lg" id="btnFazerPedido">
+        <i class="fas fa-utensils"></i> Fazer Pedido
+      </button>
+      <div class="splash__row">
+        <button class="btn btn--outline" id="btnMeusPedidos">
+          <i class="fas fa-clipboard-list"></i> Meus Pedidos
+        </button>
+        <button class="btn btn--outline" id="btnMinhaConta">
+          <i class="fas fa-user"></i> Minha Conta
+        </button>
+      </div>
+      <button class="btn btn--outline hidden" id="btnAdminPanel" style="margin-top:6px;border-color:var(--gold);color:var(--gold);">
+        <i class="fas fa-cog"></i> Painel Admin Completo
+      </button>
+    </div>
+    <div class="splash__chips">
+      <button class="chip" id="btnHoursFAB"><i class="fas fa-clock"></i> Horários</button>
+      <button class="chip" id="btnLocation"><i class="fas fa-map-marker-alt"></i> Local</button>
+      <button class="chip" id="btnContactChip"><i class="fas fa-phone"></i> Contato</button>
+    </div>
+  </div>
+  <div class="splash__socials">
+    <a href="https://wa.me/5511916835853" target="_blank" rel="noopener noreferrer" class="social-fab social-fab--whatsapp" aria-label="WhatsApp"><i class="fab fa-whatsapp"></i></a>
+    <a href="https://instagram.com/emporiocasajosessilva" target="_blank" rel="noopener noreferrer" class="social-fab social-fab--instagram" aria-label="Instagram"><i class="fab fa-instagram"></i></a>
+  </div>
+</section>
+
+<!-- ==================== MENU PAGE ==================== -->
+<section class="menu-page hidden" id="menuPage">
+  <header class="topbar">
+    <button class="topbar__btn" id="btnBackToHome" aria-label="Voltar"><i class="fas fa-arrow-left"></i></button>
+    <div class="topbar__brand">
+      <span class="topbar__name" id="menuLogoMain">CASA JOSÉ SILVA</span>
+      <span class="topbar__sub" id="menuLogoSub">pizzaria &amp; restaurante</span>
+    </div>
+    <div class="topbar__right">
+      <button class="topbar__btn" id="btnSearch" aria-label="Buscar"><i class="fas fa-search"></i></button>
+      <button class="topbar__btn topbar__cart-btn" id="btnCartMenu" aria-label="Carrinho">
+        <i class="fas fa-shopping-bag"></i>
+        <span class="topbar__badge" id="cartBadgeMenu">0</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Hero Banner -->
+  <div class="menu-hero" id="menuHero">
+    <img src="Banner.png" alt="Banner" class="menu-hero__bg">
+    <div class="menu-hero__content" id="btnScrollCardapio" style="cursor:pointer">
+      <h1 class="menu-hero__title">Nosso Cardápio</h1>
+      <p class="menu-hero__subtitle">Descubra nossos sabores</p>
+      <div class="menu-hero__arrow" aria-label="Ver cardápio">
+        <i class="fas fa-chevron-down"></i>
+      </div>
+    </div>
+  </div>
+
+  <!-- Search bar -->
+  <div class="search-bar hidden" id="searchBar">
+    <div class="search-bar__inner">
+      <i class="fas fa-search"></i>
+      <input type="text" id="searchInput" placeholder="Buscar no cardápio..." autocomplete="off">
+      <button class="search-bar__close" id="btnCloseSearch"><i class="fas fa-times"></i></button>
+    </div>
+  </div>
+
+  <!-- Info Strip - Premium Grid -->
+  <div class="info-grid">
+    <div class="info-card info-card--tempo">
+      <div class="info-card__icon"><i class="fas fa-clock"></i></div>
+      <div class="info-card__content">
+        <span class="info-card__label">Tempo</span>
+        <span class="info-card__value" id="tempoEntrega">40-60 min</span>
+      </div>
+    </div>
+    <div class="info-card info-card--minimo">
+      <div class="info-card__icon"><i class="fas fa-receipt"></i></div>
+      <div class="info-card__content">
+        <span class="info-card__label">Mínimo</span>
+        <span class="info-card__value">R$ <span id="pedidoMinimo">25,00</span></span>
+      </div>
+    </div>
+    <div class="info-card info-card--entrega">
+      <div class="info-card__icon"><i class="fas fa-truck"></i></div>
+      <div class="info-card__content">
+        <span class="info-card__label">Entrega</span>
+        <span class="info-card__value">R$ <span id="taxaEntrega">5,00</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Category tabs -->
+  <nav class="cat-nav" id="catNav">
+    <div class="cat-nav__container">
+      <div class="cat-nav__scroll" id="catNavScroll">
+        <button class="cat-tab active" data-category="todos">Todos</button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Products grid -->
+  <main class="products" id="productsGrid">
+    <div class="loader" id="productsLoader"><div class="loader__spinner"></div><p>Carregando cardápio...</p></div>
+  </main>
+
+  <!-- Floating cart button (mobile) -->
+  <button class="fab-cart hidden" id="fabCart">
+    <i class="fas fa-shopping-bag"></i>
+    <span class="fab-cart__badge" id="fabCartBadge">0</span>
+    <span class="fab-cart__total" id="fabCartTotal">R$ 0,00</span>
+  </button>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <p id="footerText">© 2024 Casa José Silva - Todos os direitos reservados</p>
+    <div class="footer__social">
+      <a href="https://wa.me/5511916835853" target="_blank" rel="noopener noreferrer"><i class="fab fa-whatsapp"></i></a>
+      <a href="https://instagram.com/emporiocasajosessilva" target="_blank" rel="noopener noreferrer"><i class="fab fa-instagram"></i></a>
+    </div>
+  </footer>
+</section>
+
+<!-- ==================== CART SIDEBAR ==================== -->
+<div class="overlay hidden" id="cartOverlay"></div>
+<aside class="cart hidden" id="cartSidebar">
+  <div class="cart__header">
+    <h2><i class="fas fa-shopping-bag"></i> Seu Pedido</h2>
+    <button class="cart__close" id="btnCloseCart"><i class="fas fa-times"></i></button>
+  </div>
+  <div class="cart__scroll" id="cartScroll" style="position:relative;">
+  <div class="cart__scroll-hint cart__scroll-hint--top" id="cartScrollTop"></div>
+  <div class="cart__scroll-hint cart__scroll-hint--bottom visible" id="cartScrollBottom"></div>
+  <div class="cart__body" id="cartItems">
+    <div class="cart__empty"><i class="fas fa-shopping-basket"></i><p>Seu carrinho está vazio</p></div>
+  </div>
+  <div class="cart__obs">
+    <label for="obsInput"><i class="fas fa-comment-dots"></i> Observações</label>
+    <textarea id="obsInput" placeholder="Ex: sem cebola, borda recheada..." rows="2"></textarea>
+  </div>
+  <div class="cart__delivery">
+    <label><i class="fas fa-motorcycle"></i> Forma de entrega</label>
+    <div class="cart__delivery-opts">
+      <button class="delivery-opt active" data-tipo="delivery"><i class="fas fa-motorcycle"></i> Delivery</button>
+      <button class="delivery-opt" data-tipo="retirada"><i class="fas fa-store"></i> Retirada</button>
+    </div>
+    <div class="cart__address" id="addressSection">
+      <div class="cart__address-row">
+        <div class="addr-field addr-field--cep">
+          <label for="addrCep">CEP <span class="addr-cep-hint" id="addrCepHint"></span></label>
+          <div class="addr-cep-row">
+            <input type="text" id="addrCep" placeholder="00000-000" maxlength="9" autocomplete="postal-code">
+            <button type="button" class="btn btn--outline btn--sm" id="btnBuscarCep" title="Buscar CEP"><i class="fas fa-search"></i></button>
+          </div>
+        </div>
+      </div>
+      <div class="cart__address-row">
+        <div class="addr-field">
+          <label for="addrStreet">Rua</label>
+          <input type="text" id="addrStreet" placeholder="Nome da rua">
+        </div>
+        <div class="addr-field addr-field--small">
+          <label for="addrNumber">Nº</label>
+          <input type="text" id="addrNumber" placeholder="123">
+        </div>
+      </div>
+      <div class="cart__address-row">
+        <div class="addr-field">
+          <label for="addrComp">Complemento</label>
+          <input type="text" id="addrComp" placeholder="Apto, bloco... (opcional)">
+        </div>
+      </div>
+      <div class="cart__address-row">
+        <div class="addr-field">
+          <label for="addrBairro">Bairro</label>
+          <input type="text" id="addrBairro" placeholder="Bairro">
+        </div>
+      </div>
+      <label class="addr-save">
+        <input type="checkbox" id="addrSave" checked>
+        <span>Salvar endereço para próximos pedidos</span>
+      </label>
+    </div>
+  </div>
+  <div class="cart__payment">
+    <label><i class="fas fa-credit-card"></i> Forma de pagamento</label>
+    <div class="cart__payment-opts">
+      <button class="payment-opt active" data-tipo="online"><i class="fas fa-lock"></i> Pagar agora</button>
+      <button class="payment-opt" data-tipo="na_entrega"><i class="fas fa-hand-holding-usd"></i> Pagar na entrega</button>
+    </div>
+    <div class="cart__payment-delivery hidden" id="paymentDeliverySection">
+      <span class="cart__payment-subtitle">Como vai pagar na entrega?</span>
+      <div class="cart__payment-delivery-opts">
+        <button class="payment-delivery-opt active" data-metodo="dinheiro"><i class="fas fa-money-bill-wave"></i> Dinheiro</button>
+        <button class="payment-delivery-opt" data-metodo="cartao"><i class="fas fa-credit-card"></i> Cartão</button>
+        <button class="payment-delivery-opt" data-metodo="pix"><i class="fas fa-qrcode"></i> Pix</button>
+      </div>
+    </div>
+  </div>
+  </div>
+  <div class="cart__footer">
+    <div class="cart__coupon">
+      <label for="couponInput"><i class="fas fa-ticket-alt"></i> Cupom de desconto</label>
+      <div class="cart__coupon-row">
+        <input type="text" id="couponInput" placeholder="Digite o cupom">
+        <button class="btn btn--outline" id="btnApplyCoupon" type="button">Aplicar</button>
+        <button class="btn btn--outline hidden" id="btnRemoveCoupon" type="button">Remover</button>
+      </div>
+      <div class="cart__coupon-status" id="cartCouponStatus"></div>
+    </div>
+    <div class="cart__summary">
+      <div class="cart__line"><span>Subtotal</span><span id="cartSubtotal">R$ 0,00</span></div>
+      <div class="cart__line" id="deliveryLine"><span>Entrega</span><span id="cartDelivery">R$ 5,00</span></div>
+      <div class="cart__line cart__line--discount hidden" id="cartDiscountLine"><span>Desconto</span><span id="cartDiscount">-R$ 0,00</span></div>
+      <div class="cart__total"><span>Total</span><span id="cartTotal">R$ 0,00</span></div>
+    </div>
+    <button class="btn btn--primary btn--lg btn--full" id="btnCheckout" disabled>
+      <i class="fas fa-lock"></i> Finalizar Pedido
+    </button>
+  </div>
+</aside>
+
+<!-- ==================== ORDERS MODAL ==================== -->
+<div class="modal-overlay hidden" id="ordersModal">
+  <div class="modal modal--orders">
+    <div class="modal__header">
+      <h2><i class="fas fa-clipboard-list"></i> Meus Pedidos</h2>
+      <button class="modal__close" data-close="ordersModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <div class="orders-container" id="ordersList">
+        <div class="orders__empty"><i class="fas fa-inbox"></i><p>Nenhum pedido encontrado.</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== MODALS ==================== -->
+
+<!-- Hours Modal -->
+<div class="modal-overlay hidden" id="hoursModal">
+  <div class="modal">
+    <div class="modal__header">
+      <h2><i class="fas fa-clock"></i> Horários</h2>
+      <button class="modal__close" data-close="hoursModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body" id="hoursBody">
+      <div class="hours-grid">
+        <div class="hours-row" data-day="0"><span class="hours-day">Domingo</span><span class="hours-time">18:00 – 22:00</span></div>
+        <div class="hours-row" data-day="1"><span class="hours-day">Segunda-feira</span><span class="hours-time">11:00 – 15:00</span></div>
+        <div class="hours-row" data-day="2"><span class="hours-day">Terça-feira</span><span class="hours-time">11:00 – 15:00 / 18:00 – 22:00</span></div>
+        <div class="hours-row" data-day="3"><span class="hours-day">Quarta-feira</span><span class="hours-time">11:00 – 15:00 / 18:00 – 22:00</span></div>
+        <div class="hours-row" data-day="4"><span class="hours-day">Quinta-feira</span><span class="hours-time">11:00 – 15:00 / 18:00 – 22:00</span></div>
+        <div class="hours-row" data-day="5"><span class="hours-day">Sexta-feira</span><span class="hours-time">11:00 – 15:00 / 18:00 – 23:30</span></div>
+        <div class="hours-row" data-day="6"><span class="hours-day">Sábado</span><span class="hours-time">11:00 – 15:00 / 18:00 – 23:30</span></div>
+      </div>
+      <div class="hours-note"><i class="fas fa-info-circle"></i> Inclusive nos feriados · Entrega em toda a região</div>
+    </div>
+  </div>
+</div>
+
+<!-- Location Modal -->
+<div class="modal-overlay hidden" id="locationModal">
+  <div class="modal">
+    <div class="modal__header">
+      <h2><i class="fas fa-map-marker-alt"></i> Localização</h2>
+      <button class="modal__close" data-close="locationModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <iframe class="modal__map" src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3654.4789234567890!2d-46.53!3d-23.69!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x0%3A0x0!2zMjPCsDQxJzI0LjAiUyA0NsKwMzEnNDguMCJX!5e0!3m2!1spt-BR!2sbr!4v1234567890" style="border:0;" allowfullscreen loading="lazy"></iframe>
+      <div class="modal__address-info">
+        <p><strong>📍 Endereço:</strong></p>
+        <p>Rua Banda, 733 – Jardim do Mar<br>São Bernardo do Campo – SP</p>
+      </div>
+      <a href="https://www.google.com/maps/search/?api=1&query=Rua+Banda%2C+733%2C+Jardim+do+Mar%2C+S%C3%A3o+Bernardo+do+Campo%2C+SP" target="_blank" rel="noopener noreferrer" class="btn btn--primary btn--full">
+        <i class="fas fa-directions"></i> Abrir no Google Maps
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- Contact Modal -->
+<div class="modal-overlay hidden" id="contactModal">
+  <div class="modal">
+    <div class="modal__header">
+      <h2><i class="fas fa-phone"></i> Contato</h2>
+      <button class="modal__close" data-close="contactModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <div class="contact-list">
+        <a href="https://wa.me/5511916835853" target="_blank" rel="noopener noreferrer" class="contact-item">
+          <i class="fab fa-whatsapp"></i>
+          <div><strong>WhatsApp</strong><span>(11) 91683-5853</span></div>
+        </a>
+        <a href="mailto:contato@emporiocasajosessilva.com.br" class="contact-item">
+          <i class="fas fa-envelope"></i>
+          <div><strong>E-mail</strong><span>contato@emporiocasajosessilva.com.br</span></div>
+        </a>
+        <a href="https://instagram.com/emporiocasajosessilva" target="_blank" rel="noopener noreferrer" class="contact-item">
+          <i class="fab fa-instagram"></i>
+          <div><strong>Instagram</strong><span>@emporiocasajosessilva</span></div>
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Login Modal -->
+<div class="modal-overlay hidden" id="loginModal">
+  <div class="modal modal--auth">
+    <div class="modal__header">
+      <h2 id="authModalTitle">Entrar</h2>
+      <button class="modal__close" data-close="loginModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-tab="login">Login</button>
+        <button class="auth-tab" data-tab="cadastro">Criar Conta</button>
+      </div>
+      <form id="loginForm" class="auth-form active">
+        <div class="form-group">
+          <label for="loginEmail">E-mail</label>
+          <input type="email" id="loginEmail" placeholder="seu@email.com" required autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label for="loginPassword">Senha</label>
+          <input type="password" id="loginPassword" placeholder="Sua senha" required autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn btn--primary btn--full"><i class="fas fa-sign-in-alt"></i> Entrar</button>
+        <button type="button" class="btn btn--link btn--full" id="btnForgotPassword"><i class="fas fa-key"></i> Esqueci minha senha</button>
+        <div class="auth-message hidden" id="forgotPasswordMsg"></div>
+      </form>
+      <form id="cadastroForm" class="auth-form">
+        <div class="form-group">
+          <label for="cadastroName">Nome Completo</label>
+          <input type="text" id="cadastroName" placeholder="Seu nome" required>
+        </div>
+        <div class="form-group">
+          <label for="cadastroPhone">Telefone</label>
+          <input type="tel" id="cadastroPhone" placeholder="(00) 00000-0000" required>
+        </div>
+        <div class="form-group">
+          <label for="cadastroEmail">E-mail</label>
+          <input type="email" id="cadastroEmail" placeholder="seu@email.com" required>
+        </div>
+        <div class="form-group">
+          <label for="cadastroPassword">Senha</label>
+          <input type="password" id="cadastroPassword" placeholder="Mínimo 6 caracteres" required>
+        </div>
+        <div class="form-group">
+          <label for="cadastroPasswordConfirm">Confirmar Senha</label>
+          <input type="password" id="cadastroPasswordConfirm" placeholder="Repita a senha" required>
+        </div>
+        <button type="submit" class="btn btn--primary btn--full"><i class="fas fa-user-plus"></i> Criar Conta</button>
+        <div class="auth-message hidden" id="cadastroConfirmMsg" role="status" aria-live="polite"></div>
+      </form>
+      <div class="auth-divider"><span>ou</span></div>
+      <button class="btn btn--google" id="btnGoogleLogin">
+        <svg width="18" height="18" viewBox="0 0 18 18"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" fill="#4285F4"/><path d="M9.003 18c2.43 0 4.467-.806 5.956-2.184l-2.909-2.258c-.806.54-1.837.86-3.047.86-2.344 0-4.328-1.584-5.036-3.711H.96v2.332C2.44 15.983 5.485 18 9.003 18z" fill="#34A853"/><path d="M3.964 10.712c-.18-.54-.282-1.117-.282-1.71 0-.593.102-1.17.282-1.71V4.96H.957C.347 6.175 0 7.55 0 9.002c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/><path d="M9.003 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.464.891 11.426 0 9.003 0 5.485 0 2.44 2.017.96 4.958L3.967 7.29c.708-2.127 2.692-3.71 5.036-3.71z" fill="#EA4335"/></svg>
+        Continuar com Google
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Product Detail Modal -->
+<div class="modal-overlay hidden" id="productModal">
+  <div class="modal modal--product">
+    <div class="modal__header">
+      <h2 id="productModalTitle">Produto</h2>
+      <button class="modal__close" data-close="productModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body" id="productModalBody"></div>
+  </div>
+</div>
+
+<!-- Promotional Popup -->
+<div class="promo-popup hidden" id="promoPopup">
+  <div class="promo-popup__backdrop" id="promoPopupBackdrop"></div>
+  <div class="promo-popup__card" role="dialog" aria-modal="true" aria-labelledby="promoPopupTitle">
+    <button class="promo-popup__close" id="promoPopupClose" aria-label="Fechar promoção"><i class="fas fa-times"></i></button>
+    <div class="promo-popup__image-wrap">
+      <img id="promoPopupImage" class="promo-popup__image" alt="Promoção" loading="lazy">
+      <span class="promo-popup__tag">Oferta Especial</span>
+    </div>
+    <div class="promo-popup__content">
+      <h3 id="promoPopupTitle">Promoção</h3>
+      <p id="promoPopupDescription"></p>
+      <div class="promo-popup__items hidden" id="promoPopupItems"></div>
+      <div class="promo-popup__prices">
+        <span class="promo-popup__price-old" id="promoPopupOldPrice"></span>
+        <span class="promo-popup__price-new" id="promoPopupNewPrice"></span>
+      </div>
+      <div class="promo-popup__coupon" id="promoPopupCouponBox">
+        Cupom: <strong id="promoPopupCoupon">-</strong>
+      </div>
+      <p class="promo-popup__rules" id="promoPopupRules"></p>
+      <div class="promo-popup__actions">
+        <button class="btn btn--outline" id="promoPopupDismiss">Fechar</button>
+        <button class="btn btn--primary" id="promoPopupAction">Ver produto</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+</div>
+<div class="toast hidden" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+<div id="adminRoot" class="hidden">
+<!-- ==================== LOGIN ==================== -->
+<section class="login-page" id="loginPage">
+  <div class="login-card">
+    <div class="login-card__logo">
+      <img src="logosemfundo.png" alt="Casa José Silva" class="login-card__logo-img">
+      <h1>Casa José Silva</h1>
+      <p>Painel Administrativo</p>
+    </div>
+    <form id="adminLoginForm">
+      <div class="form-group">
+        <label for="adminEmail">E-mail</label>
+        <input type="email" id="adminEmail" placeholder="admin@email.com" required>
+      </div>
+      <div class="form-group">
+        <label for="adminPassword">Senha</label>
+        <input type="password" id="adminPassword" placeholder="Sua senha" required>
+      </div>
+      <button type="submit" class="btn btn--primary btn--full" id="btnAdminLogin">
+        <i class="fas fa-sign-in-alt"></i> Entrar
+      </button>
+      <p class="login-error hidden" id="loginError"></p>
+    </form>
+  </div>
+</section>
+
+<!-- ==================== ADMIN DASHBOARD ==================== -->
+<section class="admin hidden" id="adminPanel">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar__header">
+      <img src="logosemfundo.png" alt="Casa José Silva" class="sidebar__logo-img">
+      <div>
+        <div class="sidebar__brand">Casa José Silva</div>
+        <div class="sidebar__sub">Administrador</div>
+      </div>
+    </div>
+    <nav class="sidebar__nav">
+      <button class="nav-item active" data-page="dashboard"><i class="fas fa-chart-line"></i> Dashboard</button>
+      <button class="nav-item" data-page="pedidos"><i class="fas fa-receipt"></i> Pedidos</button>
+      <button class="nav-item" data-page="cardapio"><i class="fas fa-pizza-slice"></i> Cardápio</button>
+      <button class="nav-item" data-page="clientes"><i class="fas fa-users"></i> Clientes</button>
+      <button class="nav-item" data-page="entrega"><i class="fas fa-motorcycle"></i> Entrega</button>
+      <button class="nav-item" data-page="promocoes"><i class="fas fa-bullhorn"></i> Promoções</button>
+      <button class="nav-item" data-page="config"><i class="fas fa-cog"></i> Configurações</button>
+    </nav>
+    <div class="sidebar__footer">
+      <div class="sidebar__user" id="adminUserInfo">Administrador</div>
+      <button class="sidebar__logout" id="btnAdminLogout"><i class="fas fa-sign-out-alt"></i> Sair</button>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main">
+    <!-- Top bar -->
+    <header class="main__topbar">
+      <button class="hamburger" id="btnHamburger"><i class="fas fa-bars"></i></button>
+      <h1 class="main__title" id="pageTitle">Dashboard</h1>
+      <div class="main__topbar-right">
+        <span class="main__date" id="currentDate"></span>
+        <a href="index.html" target="_blank" class="btn btn--outline-sm"><i class="fas fa-external-link-alt"></i> Ver Site</a>
+      </div>
+    </header>
+
+    <!-- ====== DASHBOARD PAGE ====== -->
+    <div class="page active" id="pageDashboard">
+      <div class="dashboard-toolbar">
+        <div class="dashboard-toolbar__left">
+          <h3>Janela de análise</h3>
+          <p id="kpiPeriodLabel">Últimos 7 dias</p>
+        </div>
+        <div class="dashboard-toolbar__controls">
+          <select id="dashPeriodPreset">
+            <option value="today">Hoje</option>
+            <option value="7d" selected>Últimos 7 dias</option>
+            <option value="30d">Últimos 30 dias</option>
+            <option value="this_month">Este mês</option>
+            <option value="last_month">Mês passado</option>
+            <option value="custom">Personalizado</option>
+          </select>
+          <input type="date" id="dashPeriodStart" disabled>
+          <input type="date" id="dashPeriodEnd" disabled>
+          <button class="btn btn--outline-sm" id="btnApplyPeriod"><i class="fas fa-filter"></i> Aplicar</button>
+        </div>
+      </div>
+
+      <!-- KPI Cards -->
+      <div class="kpis" id="kpiCards">
+        <div class="kpi-card">
+          <div class="kpi-card__icon" style="background:rgba(76,175,80,.1);color:#4CAF50;"><i class="fas fa-dollar-sign"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Faturamento Líquido</span>
+            <span class="kpi-card__value" id="kpiRevenueToday">R$ 0,00</span>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-card__icon" style="background:rgba(33,150,243,.1);color:#2196F3;"><i class="fas fa-shopping-cart"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Pedidos no Período</span>
+            <span class="kpi-card__value" id="kpiOrdersToday">0</span>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-card__icon" style="background:rgba(255,152,0,.1);color:#FF9800;"><i class="fas fa-receipt"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Ticket Médio</span>
+            <span class="kpi-card__value" id="kpiAvgTicket">R$ 0,00</span>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-card__icon" style="background:rgba(197,165,90,.15);color:#A68B3E;"><i class="fas fa-calendar-alt"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Faturamento Bruto</span>
+            <span class="kpi-card__value" id="kpiRevenueMonth">R$ 0,00</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="compare-strip" id="compareStrip">
+        <div class="compare-chip"><span>Receita vs período anterior</span><strong id="cmpRevenue">--</strong></div>
+        <div class="compare-chip"><span>Pedidos vs período anterior</span><strong id="cmpOrders">--</strong></div>
+        <div class="compare-chip"><span>Ticket médio vs período anterior</span><strong id="cmpAvgTicket">--</strong></div>
+        <div class="compare-chip"><span>Cancelamento vs período anterior</span><strong id="cmpCancelRate">--</strong></div>
+      </div>
+
+      <!-- KPI Cards - Advanced -->
+      <div class="kpis kpis--secondary" id="kpiCardsSecondary">
+        <div class="kpi-card kpi-card--soft">
+          <div class="kpi-card__icon" style="background:rgba(27,94,32,.1);color:#1B5E20;"><i class="fas fa-check-double"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Taxa de Entrega</span>
+            <span class="kpi-card__value" id="kpiDeliveryRate">0%</span>
+          </div>
+        </div>
+        <div class="kpi-card kpi-card--soft">
+          <div class="kpi-card__icon" style="background:rgba(229,57,53,.1);color:#E53935;"><i class="fas fa-ban"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Taxa de Cancelamento</span>
+            <span class="kpi-card__value" id="kpiCancelRate">0%</span>
+          </div>
+        </div>
+        <div class="kpi-card kpi-card--soft">
+          <div class="kpi-card__icon" style="background:rgba(33,150,243,.1);color:#2196F3;"><i class="fas fa-user-clock"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Clientes Ativos no Período</span>
+            <span class="kpi-card__value" id="kpiActiveClientsMonth">0</span>
+          </div>
+        </div>
+        <div class="kpi-card kpi-card--soft">
+          <div class="kpi-card__icon" style="background:rgba(255,152,0,.1);color:#FF9800;"><i class="fas fa-fire"></i></div>
+          <div class="kpi-card__info">
+            <span class="kpi-card__label">Horário de Pico</span>
+            <span class="kpi-card__value" id="kpiPeakHour">--:--</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Charts -->
+      <div class="charts-row">
+        <div class="chart-card">
+          <h3>Faturamento Diário no Período</h3>
+          <canvas id="chartRevenue"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Pedidos por Status no Período</h3>
+          <canvas id="chartStatus"></canvas>
+        </div>
+      </div>
+
+      <!-- Operational Reports -->
+      <div class="charts-row charts-row--triple">
+        <div class="chart-card">
+          <h3>Pedidos por Hora</h3>
+          <canvas id="chartHourlyOrders"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Tipos de Entrega</h3>
+          <canvas id="chartDeliveryTypes"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Resumo por Status</h3>
+          <div class="status-summary" id="statusSummary"></div>
+        </div>
+      </div>
+
+      <div class="charts-row charts-row--triple">
+        <div class="chart-card">
+          <h3>Pedidos por Dia da Semana</h3>
+          <canvas id="chartWeekdayOrders"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Faturamento Acumulado</h3>
+          <canvas id="chartRevenueCumulative"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Formas de Pagamento</h3>
+          <canvas id="chartPaymentMethods"></canvas>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:24px;">
+        <div class="card__header"><h3>Insights do Período</h3></div>
+        <div class="card__body card__body--padded" id="businessInsights"></div>
+      </div>
+
+      <!-- Rankings -->
+      <div class="charts-row charts-row--equal">
+        <div class="card">
+          <div class="card__header"><h3>Top 5 Produtos</h3></div>
+          <div class="card__body">
+            <table class="table">
+              <thead><tr><th>Produto</th><th>Qtd</th><th>Faturamento</th></tr></thead>
+              <tbody id="topProductsBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card__header"><h3>Top 5 Clientes</h3></div>
+          <div class="card__body">
+            <table class="table">
+              <thead><tr><th>Cliente</th><th>Pedidos</th><th>Total</th></tr></thead>
+              <tbody id="topClientsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent Orders -->
+      <div class="card">
+        <div class="card__header"><h3>Pedidos Recentes</h3></div>
+        <div class="card__body">
+          <table class="table">
+            <thead><tr><th>#</th><th>Cliente</th><th>Total</th><th>Status</th><th>Data</th></tr></thead>
+            <tbody id="recentOrdersBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px;">
+        <div class="card__header"><h3>Performance de Popups Promocionais</h3></div>
+        <div class="card__body">
+          <table class="table">
+            <thead><tr><th>Promoção</th><th>Visualizações</th><th>Cliques</th><th>Conversões</th><th>CTR</th><th>Taxa Conversão</th></tr></thead>
+            <tbody id="promotionPerfBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== PEDIDOS PAGE ====== -->
+    <div class="page" id="pagePedidos">
+      <div class="page__toolbar">
+        <button class="btn btn--primary" id="btnNewTableOrder"><i class="fas fa-plus-circle"></i> Novo Pedido Mesa</button>
+        <div class="filter-group">
+          <select id="filterStatus">
+            <option value="">Todos os Status</option>
+            <option value="pendente">Pendente</option>
+            <option value="confirmado">Confirmado</option>
+            <option value="preparando">Preparando</option>
+            <option value="saiu_entrega">Saiu p/ Entrega</option>
+            <option value="entregue">Entregue</option>
+            <option value="cancelado">Cancelado</option>
+          </select>
+          <input type="date" id="filterDate">
+        </div>
+        <button class="btn btn--outline-sm" id="btnRefreshOrders"><i class="fas fa-sync-alt"></i> Atualizar</button>
+        <button class="btn btn--outline-sm" id="btnExportCSV" title="Exportar pedidos como CSV"><i class="fas fa-file-csv"></i> Exportar CSV</button>
+      </div>
+      <div class="card">
+        <div class="card__body">
+          <table class="table">
+            <thead><tr><th>#</th><th>Cliente</th><th>Itens</th><th>Total</th><th>Entrega</th><th>Status</th><th>Data</th><th>Tempo</th><th>Ações</th></tr></thead>
+            <tbody id="ordersTableBody"></tbody>
+          </table>
+          <div class="empty-state hidden" id="ordersEmpty"><i class="fas fa-inbox"></i><p>Nenhum pedido encontrado</p></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== CARDÁPIO PAGE ====== -->
+    <div class="page" id="pageCardapio">
+      <div class="page__toolbar">
+        <button class="btn btn--primary" id="btnAddProduct"><i class="fas fa-plus"></i> Novo Produto</button>
+        <div class="filter-group">
+          <select id="filterCategory">
+            <option value="">Todas Categorias</option>
+          </select>
+          <input type="text" id="filterProduct" placeholder="Buscar produto...">
+        </div>
+      </div>
+      <div class="card">
+        <div class="card__body">
+          <table class="table">
+            <thead><tr><th>Img</th><th>Nome</th><th>Categoria</th><th>Preço</th><th>Disponível</th><th>Ações</th></tr></thead>
+            <tbody id="productsTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== CLIENTES PAGE ====== -->
+    <div class="page" id="pageClientes">
+      <div class="card">
+        <div class="card__header"><h3>Clientes</h3></div>
+        <div class="card__body">
+          <table class="table">
+            <thead><tr><th>Nome</th><th>Email</th><th>Telefone</th><th>Pedidos</th><th>Total Gasto</th></tr></thead>
+            <tbody id="clientsTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== ENTREGA PAGE ====== -->
+    <div class="page" id="pageEntrega">
+      <div class="delivery-layout">
+        <div class="delivery-map-wrap">
+          <div id="deliveryMap" class="delivery-map"></div>
+          <div class="delivery-map-legend" id="mapLegend"></div>
+        </div>
+        <div class="delivery-zones-panel">
+          <div class="card">
+            <div class="card__header delivery-zones-header">
+              <h3><i class="fas fa-map-marked-alt"></i> Regiões de Entrega</h3>
+              <button class="btn btn--primary btn--sm" id="btnAddZone"><i class="fas fa-plus"></i> Nova Região</button>
+            </div>
+            <div class="card__body" id="zonesList">
+              <div class="empty-state"><i class="fas fa-map-marked-alt"></i><p>Nenhuma região carregada</p></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== PROMOCOES PAGE ====== -->
+    <div class="page" id="pagePromocoes">
+      <div class="promotions-layout">
+        <div class="card">
+          <div class="card__header promotions-header">
+            <h3><i class="fas fa-bullhorn"></i> Criar / Editar Popup Promocional</h3>
+            <button class="btn btn--outline-sm" id="btnResetPromotionForm"><i class="fas fa-eraser"></i> Limpar</button>
+          </div>
+          <div class="card__body card__body--padded">
+            <form id="promotionForm" class="promotion-form">
+              <input type="hidden" id="promotionId">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionNome">Nome da Campanha</label>
+                  <input type="text" id="promotionNome" placeholder="Ex.: Quarta da Pizza" required>
+                </div>
+                <div class="form-group">
+                  <label for="promotionTipo">Tipo</label>
+                  <select id="promotionTipo" required>
+                    <option value="general">Geral</option>
+                    <option value="daily">Promoção do Dia</option>
+                    <option value="weekly">Promoção da Semana</option>
+                    <option value="first_login">Primeiro Login</option>
+                    <option value="first_order">Primeiro Pedido</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionTitulo">Título do Popup</label>
+                  <input type="text" id="promotionTitulo" placeholder="Ex.: Pizza grande em oferta hoje" required>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="promotionDescricao">Descrição</label>
+                <textarea id="promotionDescricao" rows="2" placeholder="Descreva a oferta de forma chamativa" required></textarea>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionOriginalPrice">Valor Original (R$)</label>
+                  <input type="number" id="promotionOriginalPrice" min="0" step="0.01" placeholder="Calculado automaticamente" readonly>
+                  <small class="promotion-price-note">Calculado pela soma do preço atual dos itens selecionados.</small>
+                </div>
+                <div class="form-group">
+                  <label for="promotionPromoPrice">Valor Promocional (R$)</label>
+                  <input type="number" id="promotionPromoPrice" min="0" step="0.01" placeholder="Ex.: 49.90">
+                </div>
+              </div>
+
+              <div class="promotion-savings" id="promotionSavingsInfo">Economia: defina o valor promocional.</div>
+
+              <div class="form-group">
+                <label for="promotionRules">Regras da promoção</label>
+                <textarea id="promotionRules" rows="3" placeholder="Ex.: válido até 22h, não cumulativo, 1 uso por cliente"></textarea>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionCoupon">Cupom</label>
+                  <input type="text" id="promotionCoupon" placeholder="Ex.: PIZZA20" maxlength="40">
+                </div>
+                <div class="form-group">
+                  <label>Imagem da promoção</label>
+                  <div class="promo-upload" id="promotionImageDropzone">
+                    <input type="file" id="promotionImageFile" accept="image/*" hidden>
+                    <div class="promo-upload__icon"><i class="fas fa-cloud-upload-alt"></i></div>
+                    <p><strong>Arraste a imagem aqui</strong> ou clique para escolher do computador</p>
+                    <span id="promotionImageHint">JPG/PNG/WebP · até 8MB</span>
+                  </div>
+                  <div class="promo-upload-preview hidden" id="promotionImagePreviewWrap">
+                    <img id="promotionImagePreview" alt="Prévia da promoção">
+                    <button type="button" class="btn btn--outline-sm btn--sm" id="btnRemovePromotionImage"><i class="fas fa-trash"></i> Remover</button>
+                  </div>
+                  <input type="hidden" id="promotionImageUrl">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Produtos da promoção</label>
+                  <div class="promotion-products-summary" id="promotionProductSelectionSummary">Nenhum item selecionado</div>
+                  <button type="button" class="btn btn--outline-sm" id="btnOpenPromotionProductsModal"><i class="fas fa-box-open"></i> Selecionar produtos / montar kit</button>
+                </div>
+                <div class="form-group">
+                  <label for="promotionButtonText">Texto do botão</label>
+                  <input type="text" id="promotionButtonText" placeholder="Ex.: Quero esse agora" value="Ver Produto">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionDateStart">Data início</label>
+                  <input type="date" id="promotionDateStart">
+                </div>
+                <div class="form-group">
+                  <label for="promotionDateEnd">Data fim</label>
+                  <input type="date" id="promotionDateEnd">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionTimeStart">Hora início</label>
+                  <input type="time" id="promotionTimeStart" value="00:00">
+                </div>
+                <div class="form-group">
+                  <label for="promotionTimeEnd">Hora fim</label>
+                  <input type="time" id="promotionTimeEnd" value="23:59">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>Dias da semana</label>
+                <div class="promo-days" id="promotionDays">
+                  <label><input type="checkbox" value="0"> Dom</label>
+                  <label><input type="checkbox" value="1"> Seg</label>
+                  <label><input type="checkbox" value="2"> Ter</label>
+                  <label><input type="checkbox" value="3"> Qua</label>
+                  <label><input type="checkbox" value="4"> Qui</label>
+                  <label><input type="checkbox" value="5"> Sex</label>
+                  <label><input type="checkbox" value="6"> Sáb</label>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="promotionDelay">Tempo para aparecer (segundos)</label>
+                  <input type="number" id="promotionDelay" min="0" step="1" value="3">
+                </div>
+                <div class="form-group">
+                  <label for="promotionCooldown">Repetir após fechar (minutos)</label>
+                  <input type="number" id="promotionCooldown" min="0" step="1" value="180">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <label class="switch-label">
+                  <input type="checkbox" id="promotionAtiva" checked>
+                  <span class="switch"></span> Popup ativo
+                </label>
+                <label class="switch-label">
+                  <input type="checkbox" id="promotionHighlight">
+                  <span class="switch"></span> Destaque visual forte
+                </label>
+              </div>
+
+              <div class="form-actions">
+                <button type="button" class="btn btn--outline-sm" id="btnDeletePromotion" style="display:none;"><i class="fas fa-trash"></i> Excluir</button>
+                <button type="submit" class="btn btn--primary" id="btnSavePromotion"><i class="fas fa-save"></i> Salvar Promoção</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card__header"><h3><i class="fas fa-list"></i> Promoções Cadastradas</h3></div>
+          <div class="card__body">
+            <table class="table">
+              <thead><tr><th>Campanha</th><th>Tipo</th><th>Cupom</th><th>Agenda</th><th>Status</th><th>Ações</th></tr></thead>
+              <tbody id="promotionsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== CONFIG PAGE ====== -->
+    <div class="page" id="pageConfig">
+      <div class="config-layout">
+        <!-- Sidebar -->
+        <aside class="config-sidebar">
+          <div class="config-sidebar__header">
+            <h3><i class="fas fa-cog"></i> Configurações</h3>
+          </div>
+          <nav class="config-nav" id="configNav">
+            <!-- Apreendidas dinamicamente pelos JS -->
+          </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="config-main">
+          <header class="config-header">
+            <div class="config-header__info">
+              <h2 id="configSectionTitle">Configurações</h2>
+              <p id="configSectionDesc" class="config-header__desc">Configure os detalhes da sua pizzaria</p>
+            </div>
+            <div class="config-header__actions">
+              <button class="btn btn--outline-sm" id="btnCancelConfig"><i class="fas fa-times"></i> Descartar</button>
+              <button class="btn btn--primary" id="btnSaveConfig"><i class="fas fa-save"></i> Salvar</button>
+            </div>
+          </header>
+
+          <!-- Campos dinâmicos -->
+          <div class="config-form" id="configForm">
+            <!-- Populate dinamicamente -->
+          </div>
+
+          <!-- Preview (para cores) -->
+          <div class="config-preview hidden" id="configPreview">
+            <h3>Pré-visualização</h3>
+            <div class="preview-demo" id="previewDemo"></div>
+          </div>
+
+          <!-- Status -->
+          <div class="config-status hidden" id="configStatus">
+            <span id="configStatusText"></span>
+          </div>
+        </main>
+      </div>
+    </div>
+  </main>
+</section>
+
+<!-- ==================== PRODUCT MODAL ==================== -->
+<div class="modal-overlay hidden" id="productFormModal">
+  <div class="modal modal--form">
+    <div class="modal__header">
+      <h2 id="productFormTitle">Novo Produto</h2>
+      <button class="modal__close" data-close="productFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <form id="productForm">
+        <input type="hidden" id="productId">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="productNome">Nome</label>
+            <input type="text" id="productNome" required>
+          </div>
+          <div class="form-group">
+            <label for="productCategoria">Categoria</label>
+            <input type="text" id="productCategoria" list="categoryList" required>
+            <datalist id="categoryList"></datalist>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="productDescricao">Descrição</label>
+          <textarea id="productDescricao" rows="3"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="productPreco">Preço (R$)</label>
+            <input type="number" id="productPreco" step="0.01" min="0" required>
+          </div>
+          <div class="form-group">
+            <label for="productOrdem">Ordem</label>
+            <input type="number" id="productOrdem" value="0">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="productMidias">Imagens e Vídeos</label>
+          <input type="file" id="productMidias" accept="image/*,video/*" multiple>
+          <div id="productMidiasPreview" class="midias-preview"></div>
+          <small>Arraste para ordenar. Suporta imagens e vídeos. Máx. 8MB cada.</small>
+        </div>
+        <div class="form-row">
+          <label class="switch-label">
+            <input type="checkbox" id="productDisponivel" checked>
+            <span class="switch"></span> Disponível
+          </label>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn--outline-sm" data-close="productFormModal">Cancelar</button>
+          <button type="submit" class="btn btn--primary" id="btnSaveProduct">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ORDER DETAIL MODAL ==================== -->
+<div class="modal-overlay hidden" id="orderDetailModal">
+  <div class="modal modal--form">
+    <div class="modal__header">
+      <h2>Detalhes do Pedido</h2>
+      <button class="modal__close" data-close="orderDetailModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body" id="orderDetailBody"></div>
+  </div>
+</div>
+
+<!-- ==================== NEW TABLE ORDER MODAL ==================== -->
+<div class="modal-overlay hidden" id="tableOrderModal">
+  <div class="modal modal--form">
+    <div class="modal__header">
+      <h2><i class="fas fa-utensils"></i> Novo Pedido de Mesa</h2>
+      <button class="modal__close" data-close="tableOrderModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <form id="tableOrderForm">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="tableOrderMesa">Mesa</label>
+            <input type="text" id="tableOrderMesa" placeholder="Ex.: 12" required>
+          </div>
+          <div class="form-group">
+            <label for="tableOrderCliente">Nome do cliente (opcional)</label>
+            <input type="text" id="tableOrderCliente" placeholder="Nome na mesa">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="tableOrderPayment">Pagamento</label>
+            <select id="tableOrderPayment" required>
+              <option value="local_dinheiro">Dinheiro</option>
+              <option value="local_cartao">Cartão</option>
+              <option value="local_pix">Pix</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="tableOrderStatus">Status inicial</label>
+            <select id="tableOrderStatus" required>
+              <option value="pendente">Pendente</option>
+              <option value="confirmado" selected>Confirmado</option>
+              <option value="preparando">Preparando</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="local-order-items-builder">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="tableOrderProduct">Adicionar item</label>
+              <select id="tableOrderProduct"></select>
+            </div>
+            <div class="form-group local-order-qty">
+              <label for="tableOrderQty">Qtd</label>
+              <input type="number" id="tableOrderQty" min="1" value="1">
+            </div>
+            <div class="form-group local-order-add-wrap">
+              <button type="button" class="btn btn--outline-sm" id="btnAddTableItem"><i class="fas fa-plus"></i> Adicionar</button>
+            </div>
+          </div>
+
+          <div class="local-order-items" id="tableOrderItemsList"></div>
+          <div class="local-order-total">Total: <strong id="tableOrderTotal">R$ 0,00</strong></div>
+        </div>
+
+        <div class="form-group">
+          <label for="tableOrderObs">Observações</label>
+          <textarea id="tableOrderObs" rows="2" placeholder="Ex.: sem cebola, aniversário, etc."></textarea>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="btn btn--outline-sm" data-close="tableOrderModal">Cancelar</button>
+          <button type="submit" class="btn btn--primary" id="btnSaveTableOrder"><i class="fas fa-save"></i> Criar Pedido</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== DELIVERY ZONE MODAL ==================== -->
+<div class="modal-overlay hidden" id="zoneFormModal">
+  <div class="modal modal--form">
+    <div class="modal__header">
+      <h2 id="zoneFormTitle"><i class="fas fa-map-marked-alt"></i> Nova Região</h2>
+      <button class="modal__close" data-close="zoneFormModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <form id="zoneForm">
+        <input type="hidden" id="zoneId">
+        <div class="form-group">
+          <label for="zoneNome">Nome da região</label>
+          <input type="text" id="zoneNome" required>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="zoneRaio">Raio (km)</label>
+            <input type="number" id="zoneRaio" step="0.1" min="0.1" required>
+          </div>
+          <div class="form-group">
+            <label for="zoneTaxa">Taxa de entrega (R$)</label>
+            <input type="number" id="zoneTaxa" step="0.01" min="0" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="zonePrazo">Prazo estimado</label>
+          <input type="text" id="zonePrazo" placeholder="Ex.: 30-45 min" required>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn--outline-sm" data-close="zoneFormModal">Cancelar</button>
+          <button type="submit" class="btn btn--primary">Salvar Região</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PROMOTION PRODUCTS MODAL ==================== -->
+<div class="modal-overlay hidden" id="promotionProductsModal">
+  <div class="modal modal--form">
+    <div class="modal__header">
+      <h2><i class="fas fa-box-open"></i> Selecionar Produtos da Promoção</h2>
+      <button class="modal__close" data-close="promotionProductsModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <div class="form-group">
+        <label for="promotionProductsSearch">Buscar item</label>
+        <input type="text" id="promotionProductsSearch" placeholder="Digite o nome do produto...">
+      </div>
+      <div class="promotion-products-grid" id="promotionProductsGrid"></div>
+      <div class="form-actions" style="margin-top:12px;">
+        <button type="button" class="btn btn--outline-sm" data-close="promotionProductsModal">Fechar</button>
+        <button type="button" class="btn btn--primary" id="btnApplyPromotionProducts"><i class="fas fa-check"></i> Confirmar seleção</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+</div>
+<div class="toast hidden" id="toast"></div>
+
+<!-- Success payment overlay -->
+<div class="success-overlay hidden" id="successOverlay">
+  <div class="success-overlay__content">
+    <div class="success-overlay__icon"><i class="fas fa-check-circle"></i></div>
+    <h2>Pedido Criado!</h2>
+    <p>Seu pedido foi enviado com sucesso.<br>Acompanhe em "Meus Pedidos".</p>
+    <button class="btn btn--primary" id="btnSuccessClose">Entendi</button>
+  </div>
+</div>
+
+<script src="main.js"></script>
+</body>
+</html>
+
+
+
+
+
+
+
+

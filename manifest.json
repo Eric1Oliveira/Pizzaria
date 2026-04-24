@@ -1,0 +1,25 @@
+{
+  "name": "Casa José Silva — Pizzaria",
+  "short_name": "Casa José Silva",
+  "description": "Delivery de pizza artesanal em São Bernardo do Campo",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a1a1a",
+  "theme_color": "#1a1a1a",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "orientation": "portrait-primary",
+  "categories": ["food", "lifestyle"],
+  "icons": [
+    { "src": "logo.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Ver cardápio",
+      "short_name": "Cardápio",
+      "url": "/?menu=1",
+      "description": "Abrir cardápio de pizzas"
+    }
+  ]
+}
