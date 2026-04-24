@@ -46,6 +46,14 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 
 .hidden { display: none !important; }
 
+/* Safety: hidden overlays must never block clicks */
+.modal-overlay.hidden,
+.promo-popup.hidden,
+.success-overlay.hidden {
+  display: none !important;
+  pointer-events: none !important;
+}
+
 /* ---------- Utility: Button ---------- */
 .btn {
   display: inline-flex; 
@@ -758,8 +766,12 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   text-align: center;
   position: relative;
   overflow: hidden;
+  max-height: 220px;
+  transition: max-height .55s cubic-bezier(.4,0,.2,1);
+}
+
+.menu-hero.menu-hero--expanded {
   max-height: 800px;
-  transition: max-height .5s ease;
 }
 
 .menu-hero__bg {
@@ -786,6 +798,20 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   right: 0;
   z-index: 2;
   animation: fadeUp .6s ease-out;
+  transition: bottom .55s cubic-bezier(.4,0,.2,1);
+}
+
+/* No estado colapsado, sobe o conteúdo para ficar visível */
+.menu-hero:not(.menu-hero--expanded) .menu-hero__content {
+  bottom: auto;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* Esconde título/subtítulo quando colapsado, mostra só a seta */
+.menu-hero:not(.menu-hero--expanded) .menu-hero__title,
+.menu-hero:not(.menu-hero--expanded) .menu-hero__subtitle {
+  display: none;
 }
 
 .menu-hero__title {
@@ -820,6 +846,14 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   animation: bounceArrow 1.8s ease-in-out infinite;
   transition: background .25s ease, transform .25s ease;
   backdrop-filter: blur(4px);
+}
+
+.menu-hero__arrow i {
+  transition: transform .4s ease;
+}
+
+.menu-hero--expanded .menu-hero__arrow i {
+  transform: rotate(180deg);
 }
 
 .menu-hero__arrow:hover {
@@ -2796,10 +2830,6 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   .info-card {
     min-width: 0;
   }
-  .info-card--tempo {}
-  .info-card--entrega {}
-  .info-card--minimo {}
-
   .info-card {
     flex-direction: column;
     align-items: flex-start;
@@ -4521,7 +4551,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
    MODALS
    ============================================================ */
 .modal-overlay {
-  position: fixed; inset: 0; z-index: 500;
+  position: fixed; inset: 0; z-index: 1600;
   background: rgba(0,0,0,.5); backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center;
   padding: 20px;

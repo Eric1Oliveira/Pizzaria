@@ -1,7 +1,7 @@
 // Service Worker — Casa José Silva Pizzaria
 // Cache-first para assets estáticos, network-first para API
 
-const CACHE_NAME = 'cjspizza-v2';
+const CACHE_NAME = 'cjspizza-v6';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -12,11 +12,15 @@ const STATIC_ASSETS = [
   '/Banner.png'
 ];
 
-// Instalar: pré-cache dos assets estáticos
+// Instalar: pré-cache dos assets estáticos (ignora falhas individuais)
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS.map(url => new Request(url, { cache: 'reload' })));
+      return Promise.allSettled(
+        STATIC_ASSETS.map(url =>
+          cache.add(new Request(url, { cache: 'reload' })).catch(() => {/* ignorar 404 */})
+        )
+      );
     }).then(() => self.skipWaiting())
   );
 });
@@ -52,7 +56,30 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first para assets do próprio site
+  // Network-first para documentos e bundles (evita app quebrado por cache antigo)
+  const isCoreAppAsset =
+    event.request.destination === 'document' ||
+    event.request.destination === 'script' ||
+    event.request.destination === 'style';
+
+  if (isCoreAppAsset) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // Cache-first para assets do próprio site (somente GET)
+  if (event.request.method !== 'GET') return;
+
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;

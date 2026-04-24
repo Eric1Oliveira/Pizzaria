@@ -65,7 +65,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Montserrat:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <!-- Leaflet CSS (admin map) - carregado aqui para evitar FOUC no admin -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20260424-01">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
@@ -440,6 +440,18 @@
         </div>
         <button type="submit" class="btn btn--primary btn--full"><i class="fas fa-user-plus"></i> Criar Conta</button>
         <div class="auth-message hidden" id="cadastroConfirmMsg" role="status" aria-live="polite"></div>
+      </form>
+      <form id="resetPasswordForm" class="auth-form">
+        <div class="form-group">
+          <label for="resetPasswordNew">Nova Senha</label>
+          <input type="password" id="resetPasswordNew" placeholder="Mínimo 6 caracteres" required autocomplete="new-password">
+        </div>
+        <div class="form-group">
+          <label for="resetPasswordConfirm">Confirmar Nova Senha</label>
+          <input type="password" id="resetPasswordConfirm" placeholder="Repita a nova senha" required autocomplete="new-password">
+        </div>
+        <button type="submit" class="btn btn--primary btn--full" id="btnResetPasswordSave"><i class="fas fa-lock"></i> Salvar nova senha</button>
+        <div class="auth-message hidden" id="resetPasswordMsg" role="status" aria-live="polite"></div>
       </form>
       <div class="auth-divider"><span>ou</span></div>
       <button class="btn btn--google" id="btnGoogleLogin">
@@ -1255,7 +1267,7 @@
   </div>
 </div>
 
-<script src="main.js"></script>
+<script src="main.js?v=20260424-01"></script>
 </body>
 </html>
 

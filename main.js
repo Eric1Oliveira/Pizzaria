@@ -83,6 +83,7 @@ let consumedPromotionUserId = null;
 let consumedPromotionIds = new Set();
 let usedCouponCodesUserId = null;
 let usedCouponCodes = new Set();
+let isPasswordRecoveryFlow = false;
 const PROMO_SESSION_KEY = 'cjs_promo_session_id';
 const promoSessionId = (() => {
   const existing = localStorage.getItem(PROMO_SESSION_KEY);
@@ -190,7 +191,8 @@ function getCurrentDeliveryFee() {
 function updateDeliveryFeePreview() {
   const fee = getCurrentDeliveryFee();
   if ($('taxaEntrega')) {
-    $('taxaEntrega').textContent = fee.toFixed(2).replace('.', ',');
+    const val = (fee == null || !Number.isFinite(fee)) ? 0 : fee;
+    $('taxaEntrega').textContent = val.toFixed(2).replace('.', ',');
   }
 }
 
@@ -428,8 +430,8 @@ function getAvailabilityTone(reason) {
 //  NAVIGATION
 // ============================================================
 function showPage(page) {
-  [splashScreen, menuPage].forEach(p => p.classList.add('hidden'));
-  page.classList.remove('hidden');
+  [splashScreen, menuPage].forEach(p => p?.classList.add('hidden'));
+  page?.classList.remove('hidden');
   window.scrollTo(0, 0);
 }
 
@@ -437,7 +439,7 @@ function isMenuPageVisible() {
   return !menuPage.classList.contains('hidden');
 }
 
-$('btnFazerPedido').addEventListener('click', async () => {
+$('btnFazerPedido')?.addEventListener('click', async () => {
   if (!currentUser) {
     openModal('loginModal');
     showToast('Cadastre-se ou faça login para acessar o cardápio', 'info');
@@ -447,31 +449,27 @@ $('btnFazerPedido').addEventListener('click', async () => {
   await loadProducts();
   await loadPromotionPopup();
 });
-$('btnMeusPedidos').addEventListener('click', () => {
+$('btnMeusPedidos')?.addEventListener('click', () => {
   if (!currentUser) { openModal('loginModal'); return; }
   openModal('ordersModal'); loadOrders();
 });
-$('btnMinhaConta').addEventListener('click', () => {
+$('btnMinhaConta')?.addEventListener('click', () => {
   if (currentUser) { handleLogout(); } else { openModal('loginModal'); }
 });
-$('btnBackToHome').addEventListener('click', () => showPage(splashScreen));
-$('btnScrollCardapio').addEventListener('click', () => {
+$('btnBackToHome')?.addEventListener('click', () => showPage(splashScreen));
+$('btnScrollCardapio')?.addEventListener('click', () => {
   const hero = $('menuHero');
-  const isMobile = window.innerWidth <= 768;
-  if (isMobile && !hero.classList.contains('menu-hero--expanded')) {
+  if (!hero) return;
+  if (!hero.classList.contains('menu-hero--expanded')) {
     hero.classList.add('menu-hero--expanded');
-    setTimeout(() => {
-      hero.classList.remove('menu-hero--expanded');
-      setTimeout(() => {
-        $('catNav').scrollIntoView({ behavior: 'smooth' });
-      }, 500);
-    }, 1800);
   } else {
     hero.classList.remove('menu-hero--expanded');
-    $('catNav').scrollIntoView({ behavior: 'smooth' });
+    setTimeout(() => {
+      $('catNav')?.scrollIntoView({ behavior: 'smooth' });
+    }, 300);
   }
 });
-$('btnAdminPanel').addEventListener('click', () => {
+$('btnAdminPanel')?.addEventListener('click', () => {
   if (!isAdmin) return;
   window.location.href = 'index.html?admin=1';
 });
@@ -479,8 +477,18 @@ $('btnAdminPanel').addEventListener('click', () => {
 // ============================================================
 //  MODALS
 // ============================================================
-function openModal(id) { $(id).classList.remove('hidden'); document.body.style.overflow = 'hidden'; }
-function closeModal(id) { $(id).classList.add('hidden'); document.body.style.overflow = ''; }
+function openModal(id) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+function closeModal(id) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.add('hidden');
+  document.body.style.overflow = '';
+}
 
 function openPromoPopup() {
   if (!isMenuPageVisible()) return;
@@ -511,18 +519,23 @@ document.querySelectorAll('[data-close]').forEach(btn => {
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
   overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(overlay.id); });
 });
+// Safety net: guarantee overlays start hidden, avoiding invisible layers blocking clicks
+document.querySelectorAll('.modal-overlay').forEach(overlay => overlay.classList.add('hidden'));
+$('promoPopup')?.classList.add('hidden');
+$('successOverlay')?.classList.add('hidden');
+document.body.style.overflow = '';
 
-$('btnHoursFAB').addEventListener('click', () => {
+$('btnHoursFAB')?.addEventListener('click', () => {
   highlightToday(); openModal('hoursModal');
 });
-$('btnLocation').addEventListener('click', () => openModal('locationModal'));
-$('btnContactChip').addEventListener('click', () => openModal('contactModal'));
+$('btnLocation')?.addEventListener('click', () => openModal('locationModal'));
+$('btnContactChip')?.addEventListener('click', () => openModal('contactModal'));
 
-$('promoPopupClose').addEventListener('click', () => closePromoPopup(true));
-$('promoPopupBackdrop').addEventListener('click', () => closePromoPopup(true));
-$('promoPopupDismiss').addEventListener('click', () => closePromoPopup(true));
+$('promoPopupClose')?.addEventListener('click', () => closePromoPopup(true));
+$('promoPopupBackdrop')?.addEventListener('click', () => closePromoPopup(true));
+$('promoPopupDismiss')?.addEventListener('click', () => closePromoPopup(true));
 
-$('promoPopupAction').addEventListener('click', async () => {
+$('promoPopupAction')?.addEventListener('click', async () => {
   if (!activePromotion) return;
   const originalPromotionPrice = parsePriceValue(activePromotion.original_price);
   const promotionalPrice = parsePriceValue(activePromotion.promo_price);
@@ -828,18 +841,19 @@ function openProductDetail(id) {
 // ============================================================
 //  SEARCH
 // ============================================================
-$('btnSearch').addEventListener('click', () => {
+$('btnSearch')?.addEventListener('click', () => {
   const bar = $('searchBar');
+  if (!bar) return;
   bar.classList.toggle('hidden');
-  if (!bar.classList.contains('hidden')) $('searchInput').focus();
+  if (!bar.classList.contains('hidden')) $('searchInput')?.focus();
 });
-$('btnCloseSearch').addEventListener('click', () => {
+$('btnCloseSearch')?.addEventListener('click', () => {
   $('searchBar').classList.add('hidden');
   $('searchInput').value = '';
   searchQuery = '';
   renderProducts();
 });
-$('searchInput').addEventListener('input', (() => {
+$('searchInput')?.addEventListener('input', (() => {
   let _debTimer;
   return (e) => {
     clearTimeout(_debTimer);
@@ -1270,10 +1284,10 @@ function closeCart() {
   $('cartSidebar').classList.add('hidden');
   document.body.style.overflow = '';
 }
-$('btnCartMenu').addEventListener('click', openCart);
-$('btnCloseCart').addEventListener('click', closeCart);
-$('cartOverlay').addEventListener('click', closeCart);
-$('fabCart').addEventListener('click', openCart);
+$('btnCartMenu')?.addEventListener('click', openCart);
+$('btnCloseCart')?.addEventListener('click', closeCart);
+$('cartOverlay')?.addEventListener('click', closeCart);
+$('fabCart')?.addEventListener('click', openCart);
 
 // --- Cart scroll indicators ---
 (function() {
@@ -1356,7 +1370,7 @@ document.querySelectorAll('.payment-delivery-opt').forEach(btn => {
 // ============================================================
 //  CHECKOUT
 // ============================================================
-$('btnCheckout').addEventListener('click', handleCheckout);
+$('btnCheckout')?.addEventListener('click', handleCheckout);
 
 function getFullAddress() {
   const rua = $('addrStreet').value.trim();
@@ -1699,6 +1713,7 @@ function buildOrderTimeline(status) {
 // Auth tabs
 document.querySelectorAll('.auth-tab').forEach(tab => {
   tab.addEventListener('click', () => {
+    isPasswordRecoveryFlow = false;
     document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
     document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
@@ -1712,8 +1727,26 @@ document.querySelectorAll('.auth-tab').forEach(tab => {
   });
 });
 
+function openResetPasswordFlow() {
+  isPasswordRecoveryFlow = true;
+  document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
+  $('resetPasswordForm')?.classList.add('active');
+  if ($('authModalTitle')) $('authModalTitle').textContent = 'Redefinir senha';
+  openModal('loginModal');
+}
+
+function openLoginFlow() {
+  isPasswordRecoveryFlow = false;
+  document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+  const loginTab = document.querySelector('.auth-tab[data-tab="login"]');
+  loginTab?.classList.add('active');
+  document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
+  $('loginForm')?.classList.add('active');
+  if ($('authModalTitle')) $('authModalTitle').textContent = 'Entrar';
+}
+
 // Login
-$('loginForm').addEventListener('submit', async (e) => {
+$('loginForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const email = $('loginEmail').value.trim();
   const password = $('loginPassword').value;
@@ -1734,7 +1767,7 @@ $('loginForm').addEventListener('submit', async (e) => {
 });
 
 // Cadastro
-$('cadastroForm').addEventListener('submit', async (e) => {
+$('cadastroForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const name = $('cadastroName').value.trim();
   const phone = $('cadastroPhone').value.trim();
@@ -1797,8 +1830,48 @@ $('btnForgotPassword')?.addEventListener('click', async () => {
   }
 });
 
+// Reset password from recovery link
+$('resetPasswordForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const p1 = $('resetPasswordNew')?.value || '';
+  const p2 = $('resetPasswordConfirm')?.value || '';
+  const msgEl = $('resetPasswordMsg');
+
+  if (p1.length < 6) {
+    showToast('Senha deve ter no mínimo 6 caracteres', 'error');
+    return;
+  }
+  if (p1 !== p2) {
+    showToast('As senhas não coincidem', 'error');
+    return;
+  }
+
+  try {
+    const { error } = await supabaseClient.auth.updateUser({ password: p1 });
+    if (error) throw error;
+
+    if (msgEl) {
+      msgEl.textContent = 'Senha alterada com sucesso. Faça login novamente.';
+      msgEl.classList.remove('hidden');
+    }
+
+    // After recovery, return user to explicit login flow
+    await supabaseClient.auth.signOut();
+    currentUser = null;
+    isAdmin = false;
+    updateAuthUI();
+    openLoginFlow();
+
+    // Clean URL params/hash from recovery link
+    window.history.replaceState({}, '', window.location.pathname);
+    showToast('Senha atualizada! Entre com sua nova senha.', 'success');
+  } catch (err) {
+    showToast(err.message || 'Erro ao atualizar senha', 'error');
+  }
+});
+
 // Google OAuth
-$('btnGoogleLogin').addEventListener('click', async () => {
+$('btnGoogleLogin')?.addEventListener('click', async () => {
   try {
     const { error } = await supabaseClient.auth.signInWithOAuth({
       provider: 'google',
@@ -1889,12 +1962,21 @@ async function checkAdminStatus(user) {
 async function initAuth() {
   // Restore admin from cache immediately (avoids flicker)
   const cachedAdmin = sessionStorage.getItem('cjs_is_admin');
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+  const isRecoveryUrl =
+    searchParams.get('reset') === '1' ||
+    searchParams.get('type') === 'recovery' ||
+    hashParams.get('type') === 'recovery';
   try {
     console.log('[Auth] Verificando sessão...');
     const { data: { session } } = await withTimeout(supabaseClient.auth.getSession(), 10000);
     console.log('[Auth] Sessão:', session ? 'ativa' : 'nenhuma');
     if (session?.user) {
       currentUser = session.user;
+      if (isRecoveryUrl) {
+        openResetPasswordFlow();
+      }
       // Show admin button immediately from cache
       if (cachedAdmin === session.user.email) {
         isAdmin = true;
@@ -1904,15 +1986,26 @@ async function initAuth() {
       updateAuthUI();
       fillAddressFromUser();
     } else {
+      currentUser = null;
+      isAdmin = false;
       sessionStorage.removeItem('cjs_is_admin');
+      updateAuthUI();
     }
   } catch (err) {
     console.error('[Auth] Erro ao verificar sessão:', err.message);
+    currentUser = null;
+    isAdmin = false;
+    updateAuthUI();
     if (isSupabaseNetworkError(err)) {
       clearSupabaseAuthCache('falha de rede ao validar sessao');
     }
   }
   supabaseClient.auth.onAuthStateChange(async (_event, session) => {
+    if (_event === 'PASSWORD_RECOVERY') {
+      currentUser = session?.user || currentUser;
+      openResetPasswordFlow();
+      return;
+    }
     const prevUser = currentUser?.id;
     currentUser = session?.user || null;
     if (currentUser?.id !== prevUser) {
@@ -2334,7 +2427,7 @@ async function loadPromotionPopup() {
 // ============================================================
 //  SUCCESS OVERLAY (from redirect)
 // ============================================================
-$('btnSuccessClose').addEventListener('click', () => {
+$('btnSuccessClose')?.addEventListener('click', () => {
   $('successOverlay').classList.add('hidden');
   showPage(splashScreen);
 });
@@ -2363,6 +2456,7 @@ function escapeHtml(str) {
 
 function showToast(msg, type = '') {
   const toast = $('toast');
+  if (!toast) return;
   toast.textContent = msg;
   toast.className = 'toast' + (type ? ` toast--${type}` : '');
   setTimeout(() => { toast.classList.add('hidden'); }, 3000);
@@ -5593,8 +5687,24 @@ checkSession();
 
 // Registrar Service Worker (#9)
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {/* silently fail */});
+  window.addEventListener('load', async () => {
+    const host = window.location.hostname;
+    const isLocal = host === 'localhost' || host === '127.0.0.1';
+
+    // Em ambiente local, desabilita SW e remove caches para evitar JS/CSS desatualizado quebrando cliques.
+    if (isLocal) {
+      try {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      } catch (_) {}
+      return;
+    }
+
+    const swPath = new URL('sw.js', window.location.href).href;
+    // Verifica se sw.js existe antes de registrar (evita erro 404 no console)
+    fetch(swPath, { method: 'HEAD' }).then(r => {
+      if (r.ok) navigator.serviceWorker.register(swPath).catch(() => {});
+    }).catch(() => {});
   });
 }
 
