@@ -81,6 +81,29 @@ function withTimeout(promise, ms = 15000) {
 }
 
 const EREDE_PROXY_URL = `${SUPABASE_URL}/functions/v1/rapid-endpoint`;
+const ENVIAR_SAIPOS_URL = `${SUPABASE_URL}/functions/v1/enviar-pedido-saipos`;
+
+// Fire-and-forget: envia pedido para Saipos após pagamento confirmado.
+// Não bloqueia o fluxo — erros são silenciosos para o usuário final.
+async function autoEnviarParaSaipos(pedidoId) {
+  if (!pedidoId) return;
+  try {
+    const res = await fetch(ENVIAR_SAIPOS_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'apikey': SUPABASE_KEY,
+      },
+      body: JSON.stringify({ pedido_id: pedidoId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) console.warn('[Saipos] Falha no envio automático:', data);
+    else console.log('[Saipos] Pedido #' + pedidoId + ' enviado:', data);
+  } catch (err) {
+    console.warn('[Saipos] Erro ao disparar envio automático:', err);
+  }
+}
 
 // ---------- State ----------
 let products = [];
@@ -101,11 +124,15 @@ let cart = (() => {
 let currentUser = null;
 let savedCardData = null; // { token, last4, brand, expiry }
 let useNewCard = false;   // true quando usuário clicou "usar outro cartão"
-let eredeTokenizationEnabled = localStorage.getItem('eredeTokenizationEnabled') !== 'false';
+// Cofre de cartões e-Rede: só tenta salvar cartão se já funcionou antes neste navegador
+let eredeTokenizationEnabled = localStorage.getItem('eredeTokenizationEnabled') === 'true';
 const AUTO_PREPARING_DELAY_MS = 2 * 60 * 1000;
 let isAdmin = false;
 let activeCategory = 'todos';
 let activeSubcategoria = null;
+let featuredCurrentIndex = 0;
+let featuredAutoTimer = null;
+let featuredTouchStartX = 0;
 
 // Categorias que abrem dropdown de sub-filtro
 const SUBCAT_CATEGORIES = ['Pizzas', 'Almoço', 'Bebidas', 'Vinhos e Espumantes'];
@@ -121,8 +148,13 @@ const DINNER_CAT_ORDER = ['Pizzas', 'Bebidas', 'Vinhos e Espumantes', 'Almoço',
 let ordersRealtimeSubscription = null;
 let searchQuery = '';
 let deliveryType = 'delivery';
+let domoHomeMode = 'padaria'; // 'padaria' | 'porta' — usado quando deliveryType === 'domo_home'
 let paymentType = 'online';
+let paymentOnlineMethod = 'credito';
 let paymentOnDeliveryMethod = 'dinheiro';
+let pixPollTimer = null;
+let pixPollReference = '';
+let pixPollOrderId = null;
 const DEFAULT_DELIVERY_FEE_OUTSIDE_AREA = 20;
 const RESTAURANT_LAT = -23.6912;  // coordenadas do restaurante (centro das zonas)
 const RESTAURANT_LNG = -46.5305;
@@ -231,9 +263,10 @@ function findDeliveryZoneForAddress(bairroValue) {
 
 function getCurrentDeliveryFee(options) {
   const strict = options && typeof options.strict === 'boolean' ? options.strict : false;
+  if (deliveryType === 'domo_home') return domoHomeMode === 'porta' ? 10 : 0;
   if (deliveryType !== 'delivery') return 0;
   const cep = $('addrCep')?.value?.replace(/\D/g,'') || '';
-  // Sem endereço algum → ainda não calculou
+  // Sem endereço algum — ainda não calculou
   if (!cep && !$('addrBairro')?.value?.trim()) return null;
   // Usar zona identificada pelo geocode
   if (currentDeliveryZone) {
@@ -252,6 +285,7 @@ function updateDeliveryFeePreview() {
 }
 
 function validarRegiaoEntregaAntesDeFinalizar() {
+  if (deliveryType === 'domo_home') return true;
   if (deliveryType !== 'delivery') return true;
   if (!currentDeliveryZone) {
     if (window.showToast) showToast('Informe seu endereço completo para calcular o frete.', 'error');
@@ -579,6 +613,7 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
     if (e.target !== overlay) return;
     if (overlay.id === 'catInputModal') { closeCatInputModal(); return; }
     if (overlay.id === 'catConfirmModal') { closeCatConfirmModal(); return; }
+    if (overlay.id === 'catEditModal') { closeCatEditModal(); return; }
     closeModal(overlay.id);
   });
 });
@@ -736,9 +771,11 @@ async function loadProducts() {
     console.log('[Produtos] Carregados:', data?.length);
     products = data || [];
     buildCategoryTabs();
+    renderFeaturedCarousel();
     renderProducts();
   } catch (err) {
     console.error('Erro ao carregar produtos:', err);
+    $('featuredSection')?.classList.add('hidden');
     grid.innerHTML = `<div class="loader"><p style="color:#D32F2F;">Erro ao carregar cardápio.</p><p style="font-size:.8rem;color:#999;margin-top:8px;">${err.message || 'Erro desconhecido'}</p><button class="btn btn--primary" style="margin-top:12px;" onclick="loadProducts()">Tentar novamente</button></div>`;
   }
 }
@@ -867,6 +904,204 @@ function formatCategory(cat) {
   return cat;
 }
 
+function getProductPrimaryMedia(product, baseClassName, preferImage = true) {
+  const midiasArr = Array.isArray(product?.midias) ? product.midias : (product?.midias ? [product.midias] : []);
+  const typesArr = Array.isArray(product?.midias_types) ? product.midias_types : (product?.midias_types ? [product.midias_types] : []);
+  if (!midiasArr.length) return '';
+
+  let idx = 0;
+  if (preferImage && typesArr[0] === 'video') {
+    const imageIdx = midiasArr.findIndex((_, i) => (typesArr[i] || 'image') === 'image');
+    idx = imageIdx >= 0 ? imageIdx : 0;
+  }
+
+  const url = midiasArr[idx];
+  const type = typesArr[idx] || 'image';
+  if (!url) return '';
+  if (type === 'video') {
+    return `<video class="${baseClassName}" src="${escapeHtml(url)}" muted playsinline preload="metadata"></video>`;
+  }
+  return `<img class="${baseClassName}" src="${escapeHtml(url)}" alt="${escapeHtml(product?.nome || '')}" loading="lazy">`;
+}
+
+function stopFeaturedAutoplay() {
+  if (featuredAutoTimer) {
+    clearInterval(featuredAutoTimer);
+    featuredAutoTimer = null;
+  }
+}
+
+function updateFeaturedCarouselPosition() {
+  const track = $('featuredTrack');
+  if (!track) return;
+  track.style.transform = `translateX(-${featuredCurrentIndex * 100}%)`;
+
+  const dots = $$('#featuredDots .featured__dot');
+  dots.forEach((dot, idx) => {
+    dot.classList.toggle('active', idx === featuredCurrentIndex);
+    dot.setAttribute('aria-current', idx === featuredCurrentIndex ? 'true' : 'false');
+  });
+}
+
+function goToFeaturedSlide(nextIndex) {
+  const track = $('featuredTrack');
+  if (!track) return;
+  const total = Number(track.dataset.total || 0);
+  if (!total) return;
+  featuredCurrentIndex = (nextIndex + total) % total;
+  updateFeaturedCarouselPosition();
+}
+
+function startFeaturedAutoplay() {
+  stopFeaturedAutoplay();
+  const track = $('featuredTrack');
+  if (!track) return;
+  const total = Number(track.dataset.total || 0);
+  if (total < 2) return;
+  featuredAutoTimer = setInterval(() => {
+    if (document.hidden) return;
+    goToFeaturedSlide(featuredCurrentIndex + 1);
+  }, 4500);
+}
+
+function getFeaturedOrderFromRuntimeConfig() {
+  try {
+    const raw = runtimeConfig['featured_order'];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(v => Number(v)).filter(v => Number.isFinite(v) && v > 0);
+  } catch (_) {
+    return [];
+  }
+}
+
+function renderFeaturedCarousel() {
+  const section = $('featuredSection');
+  const title = section?.querySelector('.section-title');
+  const track = $('featuredTrack');
+  const dots = $('featuredDots');
+  const prevBtn = $('featuredPrev');
+  const nextBtn = $('featuredNext');
+  if (!section || !title || !track || !dots || !prevBtn || !nextBtn) return;
+
+  const highlightedItems = products.filter(p => {
+    const value = p?.destaque;
+    return value === true || value === 1 || value === '1' || value === 'true' || value === 't';
+  });
+
+  const featuredOrder = getFeaturedOrderFromRuntimeConfig();
+  const featuredOrderIdx = new Map(featuredOrder.map((id, idx) => [id, idx]));
+
+  let featuredItems = highlightedItems
+    .sort((a, b) => {
+      const ai = featuredOrderIdx.has(a.id) ? featuredOrderIdx.get(a.id) : Number.MAX_SAFE_INTEGER;
+      const bi = featuredOrderIdx.has(b.id) ? featuredOrderIdx.get(b.id) : Number.MAX_SAFE_INTEGER;
+      if (ai !== bi) return ai - bi;
+      const byOrder = (a.ordem || 0) - (b.ordem || 0);
+      if (byOrder !== 0) return byOrder;
+      return String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR');
+    });
+
+  const usingFallback = featuredItems.length === 0;
+  if (usingFallback) {
+    featuredItems = products
+      .sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
+      .slice(0, 6);
+  }
+
+  if (!featuredItems.length) {
+    stopFeaturedAutoplay();
+    section.classList.add('hidden');
+    track.innerHTML = '';
+    dots.innerHTML = '';
+    return;
+  }
+
+  section.classList.remove('hidden');
+  title.innerHTML = usingFallback
+    ? '<i class="fas fa-fire"></i>Mais pedidos'
+    : '<i class="fas fa-star"></i>Destaques da casa';
+  featuredCurrentIndex = Math.max(0, Math.min(featuredCurrentIndex, featuredItems.length - 1));
+
+  track.innerHTML = featuredItems.map(p => {
+    const mediaHtml = getProductPrimaryMedia(p, 'featured-slide__img') || '<div class="featured-slide__img"></div>';
+    const availability = getProductAvailability(p);
+    const availabilityText = availability.canBuy ? '' : `<p class="featured-slide__desc">${escapeHtml(availability.reason || 'Indisponível no momento')}</p>`;
+    const pillText = usingFallback ? 'Sugestão' : 'Destaque';
+    const pillIcon = usingFallback ? 'fa-fire' : 'fa-star';
+    return `
+      <button class="featured-slide" type="button" data-id="${p.id}">
+        <div class="featured-slide__media">
+          ${mediaHtml}
+        </div>
+        <div class="featured-slide__content">
+          <span class="featured-slide__pill"><i class="fas ${pillIcon}"></i>${pillText}</span>
+          <h3 class="featured-slide__name">${escapeHtml(p.nome)}</h3>
+          ${availabilityText || `<p class="featured-slide__desc">${escapeHtml(p.descricao || 'Toque para abrir e pedir em segundos.')}</p>`}
+          <div class="featured-slide__footer">
+            <span class="featured-slide__price">${formatMoney(p.preco)}</span>
+            <span class="featured-slide__cta">Pedir agora <i class="fas fa-arrow-right"></i></span>
+          </div>
+        </div>
+      </button>
+    `;
+  }).join('');
+  track.dataset.total = String(featuredItems.length);
+
+  dots.innerHTML = featuredItems.map((_, idx) => {
+    const activeClass = idx === featuredCurrentIndex ? ' active' : '';
+    return `<button type="button" class="featured__dot${activeClass}" data-index="${idx}" aria-label="Ir para destaque ${idx + 1}" aria-current="${idx === featuredCurrentIndex ? 'true' : 'false'}"></button>`;
+  }).join('');
+
+  const hasMany = featuredItems.length > 1;
+  prevBtn.style.display = hasMany ? '' : 'none';
+  nextBtn.style.display = hasMany ? '' : 'none';
+  dots.style.display = hasMany ? 'flex' : 'none';
+
+  track.querySelectorAll('.featured-slide').forEach(slide => {
+    slide.addEventListener('click', () => {
+      const id = Number(slide.dataset.id || 0);
+      if (id) openProductDetail(id);
+    });
+  });
+
+  dots.querySelectorAll('.featured__dot').forEach(dot => {
+    dot.addEventListener('click', () => {
+      const idx = Number(dot.dataset.index || 0);
+      goToFeaturedSlide(idx);
+      startFeaturedAutoplay();
+    });
+  });
+
+  prevBtn.onclick = () => {
+    goToFeaturedSlide(featuredCurrentIndex - 1);
+    startFeaturedAutoplay();
+  };
+  nextBtn.onclick = () => {
+    goToFeaturedSlide(featuredCurrentIndex + 1);
+    startFeaturedAutoplay();
+  };
+
+  track.onpointerdown = (ev) => {
+    featuredTouchStartX = ev.clientX || 0;
+  };
+  track.onpointerup = (ev) => {
+    const endX = ev.clientX || 0;
+    const delta = endX - featuredTouchStartX;
+    if (Math.abs(delta) > 40) {
+      goToFeaturedSlide(delta > 0 ? featuredCurrentIndex - 1 : featuredCurrentIndex + 1);
+      startFeaturedAutoplay();
+    }
+  };
+
+  section.onmouseenter = stopFeaturedAutoplay;
+  section.onmouseleave = startFeaturedAutoplay;
+
+  updateFeaturedCarouselPosition();
+  startFeaturedAutoplay();
+}
+
 // ---------- Render Products ----------
 function renderProducts() {
   const grid = $('productsGrid');
@@ -922,20 +1157,7 @@ function renderProducts() {
       const availability = getProductAvailability(p);
       const availabilityTone = getAvailabilityTone(availability.reason);
       const dataCategory = normalizeCategoryKey(p.categoria);
-      // Primeira mídia (imagem ou vídeo)
-      let midiaHtml = '';
-      const midiasArr = Array.isArray(p.midias) ? p.midias : (p.midias ? [p.midias] : []);
-      const typesArr = Array.isArray(p.midias_types) ? p.midias_types : (p.midias_types ? [p.midias_types] : []);
-      if (midiasArr.length > 0) {
-        const idx = typesArr[0] === 'video' ? midiasArr.findIndex((_, i) => typesArr[i] === 'image') : 0;
-        const url = midiasArr[idx >= 0 ? idx : 0];
-        const type = typesArr[idx >= 0 ? idx : 0] || 'image';
-        if (type === 'image') {
-          midiaHtml = `<img class="product-card__img" src="${escapeHtml(url)}" alt="${escapeHtml(p.nome)}" loading="lazy">`;
-        } else if (type === 'video') {
-          midiaHtml = `<video class="product-card__img" src="${escapeHtml(url)}" alt="${escapeHtml(p.nome)}" muted playsinline preload="metadata" style="object-fit:contain;width:100%;height:100%;max-height:120px;"></video>`;
-        }
-      }
+      const midiaHtml = getProductPrimaryMedia(p, 'product-card__img');
       html += `
       <div class="product-card" data-id="${p.id}" data-category="${dataCategory}">
         <div class="product-card__img-wrap">
@@ -1055,6 +1277,11 @@ $('searchInput')?.addEventListener('input', (() => {
     }, 250);
   };
 })());
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopFeaturedAutoplay();
+  else startFeaturedAutoplay();
+});
 
 // ============================================================
 //  CART
@@ -1466,6 +1693,7 @@ function openCart() {
   $('cartSidebar').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
   updateCartUI();
+  if (paymentType === 'online') updateOnlinePaymentUI();
 }
 function closeCart() {
   $('cartOverlay').classList.add('hidden');
@@ -1518,6 +1746,48 @@ function refreshCartPricingRealtime() {
   updateCartUI();
 }
 
+const DOMO_SCHED_MIN_MINUTES = 40;
+
+function _getDomoMinSchedDate() {
+  const d = new Date(Date.now() + DOMO_SCHED_MIN_MINUTES * 60 * 1000);
+  d.setSeconds(0, 0);
+  const rem = d.getMinutes() % 5;
+  if (rem !== 0) d.setMinutes(d.getMinutes() + (5 - rem));
+  return d;
+}
+
+function _refreshDomoScheduleInput() {
+  const input = $('domoAgend');
+  if (!input) return;
+  const minDate = _getDomoMinSchedDate();
+  const minTime = `${String(minDate.getHours()).padStart(2,'0')}:${String(minDate.getMinutes()).padStart(2,'0')}`;
+  // Clear if entered time is before the minimum allowed
+  if (input.value && input.value < minTime) input.value = '';
+}
+
+// Determina o modo Domo Home com base no período atual
+function getDomoHomeCurrentMode() {
+  const shop = getScheduleContext();
+  if (shop.activePeriod?.key === 'lunch') return 'padaria';
+  if (shop.activePeriod?.key === 'dinner') return 'porta';
+  // Fora do horário: divide por hora (antes das 15h = manhã, após = noite)
+  return new Date().getHours() < 15 ? 'padaria' : 'porta';
+}
+
+// Atualiza visibilidade das opções Domo Home com base no horário
+function updateDomoHomeSection() {
+  const mode = getDomoHomeCurrentMode();
+  domoHomeMode = mode;
+  document.querySelectorAll('.domo-opt').forEach(btn => {
+    const isActive = btn.dataset.domo === mode;
+    btn.style.display = isActive ? '' : 'none';
+    btn.classList.toggle('active', isActive);
+  });
+  $('domoPortaSection')?.classList.toggle('hidden', mode !== 'porta');
+  // Agendamento aparece em TODOS os modos Domo Home
+  _refreshDomoScheduleInput();
+}
+
 // Delivery type toggle
 document.querySelectorAll('.delivery-opt').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -1525,7 +1795,10 @@ document.querySelectorAll('.delivery-opt').forEach(btn => {
     btn.classList.add('active');
     deliveryType = btn.dataset.tipo;
     $('addressSection').style.display = deliveryType === 'delivery' ? 'flex' : 'none';
-    $('deliveryLine').style.display = deliveryType === 'delivery' ? 'flex' : 'none';
+    const isDomoHome = deliveryType === 'domo_home';
+    $('domoHomeSection')?.classList.toggle('hidden', !isDomoHome);
+    if (isDomoHome) updateDomoHomeSection();
+    $('deliveryLine').style.display = (deliveryType === 'delivery' || deliveryType === 'domo_home') ? 'flex' : 'none';
     refreshCartPricingRealtime();
   });
 });
@@ -1543,7 +1816,17 @@ document.querySelectorAll('.payment-opt').forEach(btn => {
     paymentType = btn.dataset.tipo;
     $('paymentDeliverySection').classList.toggle('hidden', paymentType !== 'na_entrega');
     $('paymentOnlineSection').classList.toggle('hidden', paymentType !== 'online');
-    if (paymentType === 'online') renderSavedCardUI();
+    if (paymentType === 'online') updateOnlinePaymentUI();
+  });
+});
+
+// Payment online method toggle (crédito / débito / pix)
+document.querySelectorAll('.payment-online-opt').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.payment-online-opt').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    paymentOnlineMethod = btn.dataset.metodo || 'credito';
+    updateOnlinePaymentUI();
   });
 });
 
@@ -1556,12 +1839,54 @@ document.querySelectorAll('.payment-delivery-opt').forEach(btn => {
   });
 });
 
+function updateOnlinePaymentUI() {
+  const isPix = paymentOnlineMethod === 'pix';
+  const isDebit = paymentOnlineMethod === 'debito';
+  $('paymentOnlineCardSection')?.classList.toggle('hidden', isPix);
+  $('paymentOnlinePixSection')?.classList.toggle('hidden', !isPix);
+  if (isDebit && $('chkSaveCard')) $('chkSaveCard').checked = false;
+  if (isDebit) {
+    useNewCard = true;
+    renderSavedCardUI();
+  } else if (!isPix) {
+    renderSavedCardUI();
+  }
+}
+
+function canOfferSaveCardOption() {
+  return paymentOnlineMethod === 'credito' && !!currentUser && eredeTokenizationEnabled;
+}
+
+function getOnlineFormaPagamento() {
+  if (paymentOnlineMethod === 'pix') return 'pix';
+  if (paymentOnlineMethod === 'debito') return 'erede_debito';
+  return 'erede';
+}
+
+function getOnlineCardKind() {
+  return paymentOnlineMethod === 'debito' ? 'debit' : 'credit';
+}
+
 // ============================================================
 //  CHECKOUT
 // ============================================================
 $('btnCheckout')?.addEventListener('click', handleCheckout);
 
+function _getDomoPortaInfo() {
+  const bloco = $('domoBloco')?.value?.trim() || '';
+  const apto  = $('domoNumApto')?.value?.trim() || '';
+  const parts = [bloco, apto ? `Apto ${apto}` : ''].filter(Boolean);
+  return parts.join(' - ');
+}
+
 function getFullAddress() {
+  if (deliveryType === 'domo_home') {
+    if (domoHomeMode === 'porta') {
+      const info = _getDomoPortaInfo();
+      return info ? `Domo Home - Porta do cliente (${info})` : 'Domo Home - Porta do cliente';
+    }
+    return 'Domo Home - Padaria';
+  }
   const rua = $('addrStreet').value.trim();
   const num = $('addrNumber').value.trim();
   const comp = $('addrComp').value.trim();
@@ -1574,6 +1899,21 @@ function getFullAddress() {
 }
 
 function getCheckoutAddressFields() {
+  if (deliveryType === 'domo_home') {
+    const bloco = $('domoBloco')?.value?.trim() || '';
+    const apto  = $('domoNumApto')?.value?.trim() || '';
+    const comp  = [bloco, apto ? `Apto ${apto}` : ''].filter(Boolean).join(' - ');
+    return {
+      cep: null,
+      rua: 'Domo Home',
+      numero: apto || null,
+      bairro: 'Domo Home',
+      complemento: comp || (domoHomeMode === 'padaria' ? 'Padaria' : null),
+      referencia: domoHomeMode === 'padaria'
+        ? 'Entrega na padaria (manhã)'
+        : `Entrega na porta do cliente${bloco ? ' — ' + bloco : ''}${apto ? ', Apto ' + apto : ''}`
+    };
+  }
   if (deliveryType !== 'delivery') {
     return {
       cep: null,
@@ -1607,21 +1947,17 @@ function fillAddressFromUser() {
   // Skip entirely when the admin panel is active to avoid Nominatim rate-limits.
   if (isAdmin) return;
   const addr = currentUser.user_metadata?.address;
-  const cpf = currentUser.user_metadata?.cpf || '';
-  if (!addr && !cpf) return;
-  if (addr) {
-    if (addr.cep) $('addrCep').value = addr.cep;
-    if (addr.street) $('addrStreet').value = addr.street;
-    if (addr.number) $('addrNumber').value = addr.number;
-    if (addr.comp) $('addrComp').value = addr.comp;
-    if (addr.bairro) $('addrBairro').value = addr.bairro;
-    // Dispara geocode automático se tiver CEP salvo
-    if (addr.cep) {
-      lookupCep(addr.cep);
-      return; // lookupCep já chama refreshCartPricingRealtime
-    }
+  if (!addr) return;
+  if (addr.cep) $('addrCep').value = addr.cep;
+  if (addr.street) $('addrStreet').value = addr.street;
+  if (addr.number) $('addrNumber').value = addr.number;
+  if (addr.comp) $('addrComp').value = addr.comp;
+  if (addr.bairro) $('addrBairro').value = addr.bairro;
+  // Dispara geocode automático se tiver CEP salvo
+  if (addr.cep) {
+    lookupCep(addr.cep);
+    return; // lookupCep já chama refreshCartPricingRealtime
   }
-  if (cpf && $('addrCpf')) $('addrCpf').value = cpf;
   refreshCartPricingRealtime();
 }
 
@@ -1659,11 +1995,11 @@ async function lookupCep(cep) {
         if (zone) {
           currentDeliveryZone = zone;
         } else {
-          // Fora de todas as zonas configuradas → usa frete padrão
+          // Fora de todas as zonas configuradas — usa frete padrão
           currentDeliveryZone = { nome: 'Fora da área configurada', taxa_entrega: DEFAULT_DELIVERY_FEE_OUTSIDE_AREA, is_outside: true };
         }
       } else {
-        // Não geocodificou → frete padrão como fallback
+        // Não geocodificou — frete padrão como fallback
         currentDeliveryZone = { nome: 'Frete padrão', taxa_entrega: DEFAULT_DELIVERY_FEE_OUTSIDE_AREA, is_outside: true };
       }
     }
@@ -1801,7 +2137,7 @@ function renderSavedCardUI() {
     box.classList.remove('hidden');
     if (useNewCard) {
       form.classList.remove('hidden');
-      if (saveRow && currentUser) saveRow.classList.remove('hidden');
+      if (saveRow) saveRow.classList.toggle('hidden', !canOfferSaveCardOption());
     } else {
       form.classList.add('hidden');
       if (saveRow) saveRow.classList.add('hidden');
@@ -1809,10 +2145,7 @@ function renderSavedCardUI() {
   } else {
     box.classList.add('hidden');
     form.classList.remove('hidden');
-    if (saveRow) {
-      if (currentUser && eredeTokenizationEnabled) saveRow.classList.remove('hidden');
-      else saveRow.classList.add('hidden');
-    }
+    if (saveRow) saveRow.classList.toggle('hidden', !canOfferSaveCardOption());
   }
 }
 
@@ -1827,6 +2160,31 @@ function disableTokenizationForCurrentMerchant() {
   localStorage.setItem('eredeTokenizationEnabled', 'false');
   if ($('chkSaveCard')) $('chkSaveCard').checked = false;
   renderSavedCardUI();
+}
+
+async function trySaveCardAfterSuccessfulCheckout(cardData, paymentResult) {
+  if (!canOfferSaveCardOption() || !$('chkSaveCard')?.checked) return;
+  if (normalizeERedeReturnCode(paymentResult) !== '00') return;
+
+  const last4 = paymentResult.last4 || cardData.cardNumber.slice(-4);
+  const brand = paymentResult.brand?.name || '';
+  const expiry = `${cardData.expirationMonth}/${String(cardData.expirationYear).slice(-2)}`;
+
+  try {
+    const tokenResult = await callERedeTokenize(cardData, currentUser.email);
+    const savedToken = extractTokenizationId(tokenResult);
+    if (savedToken) {
+      await saveSavedCardToProfile(savedToken, last4, brand, expiry);
+      eredeTokenizationEnabled = true;
+      localStorage.setItem('eredeTokenizationEnabled', 'true');
+      renderSavedCardUI();
+    }
+  } catch (tokenErr) {
+    if (isERedeTokenizationNotEnabledError(tokenErr)) {
+      disableTokenizationForCurrentMerchant();
+    }
+    console.warn('[Cartão salvo] Cofre indisponível — pagamento já foi aprovado.', tokenErr);
+  }
 }
 
 async function saveSavedCardToProfile(token, last4, brand, expiry) {
@@ -1947,7 +2305,7 @@ function normalizeERedeReturnCode(result) {
   return str;
 }
 
-async function callERedeEdgeTransaction(payload) {
+async function callERedeEdge(action, payload) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30000);
 
@@ -1959,7 +2317,7 @@ async function callERedeEdgeTransaction(payload) {
         apikey: SUPABASE_KEY,
         Authorization: `Bearer ${SUPABASE_KEY}`
       },
-      body: JSON.stringify({ payload }),
+      body: JSON.stringify({ action, payload }),
       signal: controller.signal
     });
 
@@ -1973,7 +2331,24 @@ async function callERedeEdgeTransaction(payload) {
 
     if (!response.ok) {
       console.error('e-Rede edge HTTP error:', response.status, responseBody);
-      throw new Error(responseBody.error || responseBody.message || `Erro HTTP ${response.status} no pagamento online`);
+      const detail = String(
+        responseBody.message ||
+        responseBody.error ||
+        responseBody.details?.returnMessage ||
+        responseBody.details?.returnCode ||
+        ''
+      ).trim();
+      if (action === 'pix' && /cardnumber/i.test(detail)) {
+        throw new Error('Pix ainda não está ativo no servidor. Publique a função rapid-endpoint no Supabase (veja instruções no painel).');
+      }
+      if (action === 'pix' && /unknown pix key|invalid pix key|3095|3090/i.test(detail)) {
+        throw new Error(
+          'Pix online não está habilitado na conta e-Rede/Itaú desta loja. ' +
+          'No portal userede.com.br: Para vender → PIX → "Quero utilizar Pix" e vincule a chave da conta Itaú. ' +
+          'Enquanto isso, o cliente pode pagar com Crédito, Débito ou Pix na entrega.'
+        );
+      }
+      throw new Error(detail || `Erro HTTP ${response.status} no pagamento online`);
     }
 
     return responseBody;
@@ -1987,7 +2362,169 @@ async function callERedeEdgeTransaction(payload) {
   }
 }
 
-$('addrCpf')?.addEventListener('input', (e) => { e.target.value = maskCpf(e.target.value); });
+async function callERedeEdgeTransaction(payload) {
+  const kind = String(payload?.kind || '').toLowerCase();
+  const action = kind === 'pix' ? 'pix' : 'charge';
+  return callERedeEdge(action, payload);
+}
+
+async function callERedeEdgeQuery({ reference, tid } = {}) {
+  return callERedeEdge('query', { reference, tid });
+}
+
+function getPixInfoFromResult(result) {
+  const qr = result?.qrCodeResponse || {};
+  return {
+    qrCodeData: qr.qrCodeData || result?.qrCodeData || '',
+    qrCodeImage: qr.qrCodeImage || result?.qrCodeImage || '',
+    tid: result?.tid || qr?.tid || '',
+    status: String(qr?.status || result?.status || '').trim(),
+    returnCode: String(qr?.returnCode || result?.returnCode || '').trim()
+  };
+}
+
+function isPixPaymentApproved(result) {
+  const status = String(
+    result?.qrCodeResponse?.status ||
+    result?.authorization?.status ||
+    result?.status ||
+    ''
+  ).trim().toLowerCase();
+  return status === 'approved';
+}
+
+function stopPixPaymentPolling() {
+  if (pixPollTimer) {
+    clearInterval(pixPollTimer);
+    pixPollTimer = null;
+  }
+  pixPollReference = '';
+  pixPollOrderId = null;
+}
+
+function hidePixPaymentOverlay() {
+  stopPixPaymentPolling();
+  $('pixPayOverlay')?.classList.add('hidden');
+}
+
+async function copyPixCodeToClipboard(pixCode) {
+  const code = String(pixCode || '').trim();
+  if (!code) {
+    showToast('Código Pix indisponível', 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(code);
+    showToast('Código Pix copiado!', 'success');
+  } catch (_) {
+    showToast('Não foi possível copiar. Copie manualmente.', 'error');
+  }
+}
+
+function showPixPaymentOverlay({ total, qrCodeData, qrCodeImage }) {
+  const overlay = $('pixPayOverlay');
+  const img = $('pixQrImage');
+  const statusEl = $('pixPayStatus');
+  if (!overlay || !img) return;
+
+  $('pixPayTotal').textContent = `Total: ${formatMoney(total)}`;
+  img.removeAttribute('src');
+  if (qrCodeImage) {
+    const src = String(qrCodeImage).startsWith('data:')
+      ? qrCodeImage
+      : `data:image/png;base64,${qrCodeImage}`;
+    img.src = src;
+    img.classList.remove('hidden');
+  } else {
+    img.classList.add('hidden');
+  }
+
+  overlay.dataset.pixCode = qrCodeData || '';
+  if (statusEl) {
+    statusEl.className = 'pix-pay-status';
+    statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Aguardando pagamento...';
+  }
+  overlay.classList.remove('hidden');
+}
+
+function startPixPaymentPolling(reference, orderId) {
+  stopPixPaymentPolling();
+  pixPollReference = reference;
+  pixPollOrderId = orderId;
+
+  const poll = async () => {
+    if (!pixPollReference || !pixPollOrderId) return;
+    try {
+      const result = await callERedeEdgeQuery({ reference: pixPollReference });
+      if (isPixPaymentApproved(result)) {
+        await finalizePixPaidOrder(pixPollOrderId, result);
+      } else {
+        const pix = getPixInfoFromResult(result);
+        if (pix.status && pix.status.toLowerCase() === 'canceled') {
+          const statusEl = $('pixPayStatus');
+          if (statusEl) {
+            statusEl.className = 'pix-pay-status pix-pay-status--err';
+            statusEl.textContent = 'Pagamento Pix cancelado ou expirado.';
+          }
+          stopPixPaymentPolling();
+        }
+      }
+    } catch (err) {
+      console.warn('[Pix] Falha ao consultar pagamento:', err);
+    }
+  };
+
+  poll();
+  pixPollTimer = setInterval(poll, 3000);
+}
+
+async function finalizePixPaidOrder(orderId, paymentResult) {
+  stopPixPaymentPolling();
+  const statusEl = $('pixPayStatus');
+  if (statusEl) {
+    statusEl.className = 'pix-pay-status pix-pay-status--ok';
+    statusEl.innerHTML = '<i class="fas fa-check-circle"></i> Pagamento confirmado!';
+  }
+
+  try {
+    const tid = getERedeResultField(paymentResult, 'tid') || getPixInfoFromResult(paymentResult).tid || null;
+    const returnCode = normalizeERedeReturnCode(paymentResult) || '00';
+    await supabaseClient.from('pedidos').update({
+      status: 'preparando',
+      erede_tid: tid,
+      erede_return_code: returnCode,
+      erede_return_message: getERedeResultField(paymentResult, 'returnMessage') || 'Pix aprovado'
+    }).eq('id', orderId).eq('user_id', currentUser?.id || '');
+
+    autoEnviarParaSaipos(orderId);
+    if (deliveryType === 'delivery') await saveAddressToUser();
+
+    await trackPromotionConversion(appliedCoupon, orderId).catch(() => {});
+    if (appliedCoupon?.id) await increaseCouponUsage(appliedCoupon.id);
+
+    cart = [];
+    saveCart();
+    closeCart();
+    updateCartUI();
+    clearCouponState();
+    hidePixPaymentOverlay();
+    $('successOverlay')?.classList.remove('hidden');
+  } catch (err) {
+    console.error('[Pix] Erro ao confirmar pedido:', err);
+    showToast('Pagamento recebido, mas houve erro ao atualizar o pedido. Verifique em Meus Pedidos.', 'error');
+  }
+}
+
+$('btnPixPayClose')?.addEventListener('click', () => {
+  hidePixPaymentOverlay();
+  showToast('Pagamento Pix pendente. Você pode pagar depois em Meus Pedidos.', '');
+});
+
+$('btnCopyPixCode')?.addEventListener('click', () => {
+  const code = $('pixPayOverlay')?.dataset?.pixCode || '';
+  copyPixCodeToClipboard(code);
+});
+
 $('cadastroCpf')?.addEventListener('input', (e) => { e.target.value = maskCpf(e.target.value); });
 $('payCardNumber')?.addEventListener('input', (e) => { e.target.value = maskCardNumber(e.target.value); });
 $('payCardExpiry')?.addEventListener('input', (e) => { e.target.value = maskExpiry(e.target.value); });
@@ -2041,9 +2578,9 @@ async function saveAddressToUser() {
     bairro: $('addrBairro').value.trim()
   };
   if (!addr.street || !addr.number || !addr.bairro) return;
-  const cpf = $('addrCpf')?.value?.trim() || '';
   try {
-    await supabaseClient.auth.updateUser({ data: { address: addr, cpf: cpf || undefined } });
+    await supabaseClient.auth.updateUser({ data: { address: addr } });
+    if (currentUser) currentUser = (await supabaseClient.auth.getUser())?.data?.user || currentUser;
   } catch (e) { /* silently fail */ }
 }
 
@@ -2096,12 +2633,26 @@ async function handleCheckout() {
   if (deliveryType === 'delivery' && !getFullAddress()) {
     showToast('Preencha rua, número e bairro', 'error'); return;
   }
-
-  const cpfDigits = String($('addrCpf')?.value || currentUser.user_metadata?.cpf || '').replace(/\D/g, '');
-  if (cpfDigits.length !== 11) {
-    showToast('CPF obrigatório para finalizar o pedido', 'error');
-    $('addrCpf')?.focus();
+  if (deliveryType === 'domo_home' && domoHomeMode === 'porta' && !$('domoNumApto')?.value?.trim()) {
+    showToast('Informe o número do apartamento para entrega na porta', 'error');
+    $('domoNumApto')?.focus();
     return;
+  }
+  if (deliveryType === 'domo_home' && $('domoAgend')?.value) {
+    const timeVal = $('domoAgend').value; // "HH:mm"
+    const [h, m] = timeVal.split(':').map(Number);
+    const agendDate = new Date();
+    agendDate.setHours(h, m, 0, 0);
+    const minDate = new Date(Date.now() + DOMO_SCHED_MIN_MINUTES * 60 * 1000);
+    if (agendDate < minDate) {
+      // Try scheduling for tomorrow
+      agendDate.setDate(agendDate.getDate() + 1);
+    }
+    if (agendDate < minDate) {
+      showToast(`Agendamento deve ser com pelo menos ${DOMO_SCHED_MIN_MINUTES} min de antecedência`, 'error');
+      $('domoAgend')?.focus();
+      return;
+    }
   }
 
   const blockedCartItem = cart.find(item => Boolean(getCartItemBlockedReason(item)));
@@ -2135,9 +2686,11 @@ async function handleCheckout() {
     const total = pricing.total;
     const orderNSU = 'CJS' + Date.now();
     const obs = $('obsInput').value.trim();
-    const enderecoEntrega = deliveryType === 'delivery' ? getFullAddress() : 'Retirada no local';
+    let enderecoEntrega;
+    if (deliveryType === 'delivery') enderecoEntrega = getFullAddress();
+    else if (deliveryType === 'domo_home') enderecoEntrega = getFullAddress();
+    else enderecoEntrega = 'Retirada no local';
     const structuredAddress = getCheckoutAddressFields();
-    const cpfCliente = maskCpf(cpfDigits);
 
     const pagamentoEntregaMap = {
       dinheiro: 'na_entrega_dinheiro',
@@ -2146,7 +2699,7 @@ async function handleCheckout() {
     };
     const formaPagamento = paymentType === 'na_entrega'
       ? pagamentoEntregaMap[paymentOnDeliveryMethod] || 'na_entrega_dinheiro'
-      : 'erede';
+      : getOnlineFormaPagamento();
 
     const pedidoBase = {
       user_id: currentUser.id,
@@ -2159,13 +2712,20 @@ async function handleCheckout() {
       nome_cliente: currentUser.user_metadata?.name || currentUser.email,
       telefone_cliente: currentUser.user_metadata?.phone || '',
       email_cliente: currentUser.email,
-      cpf_cliente: cpfCliente || null,
+      cpf_cliente: null,
       endereco_entrega: enderecoEntrega,
       ...structuredAddress,
       forma_pagamento: formaPagamento,
       observacoes: obs,
       forma_entrega: deliveryType,
       origem: 'site',
+      agendamento_entrega: (() => {
+        if (deliveryType !== 'domo_home' || !$('domoAgend')?.value) return null;
+        const [h, m] = $('domoAgend').value.split(':').map(Number);
+        const d = new Date(); d.setHours(h, m, 0, 0);
+        if (d < new Date(Date.now() + DOMO_SCHED_MIN_MINUTES * 60 * 1000)) d.setDate(d.getDate() + 1);
+        return d.toISOString();
+      })(),
       coupon_code: appliedCoupon?.code || null,
       coupon_discount: discount,
       coupon_meta: appliedCoupon ? {
@@ -2181,6 +2741,9 @@ async function handleCheckout() {
 
       if (deliveryType === 'delivery') await saveAddressToUser();
 
+      // Pedido criado ? enviar para Saipos automaticamente (server-side)
+      if (createdOrder?.id) autoEnviarParaSaipos(createdOrder.id);
+
       cart = [];
       saveCart();
       closeCart();
@@ -2194,13 +2757,59 @@ async function handleCheckout() {
     }
 
     const amount = Math.max(1, Math.round(total * 100));
-    let result;
+    const cardKind = getOnlineCardKind();
 
-    if (savedCardData && !useNewCard) {
-      // Usar cartão salvo (token) — sem necessidade de preencher campos
+    if (paymentOnlineMethod === 'pix') {
+      const pixReference = 'pix' + orderNSU;
+      const pixResult = await callERedeEdgeTransaction({
+        kind: 'pix',
+        reference: pixReference,
+        amount,
+        expirationMinutes: 30
+      });
+
+      const pixInfo = getPixInfoFromResult(pixResult);
+      const pixReturnCode = normalizeERedeReturnCode(pixResult) || pixInfo.returnCode;
+      if (pixReturnCode && pixReturnCode !== '00') {
+        throw new Error(getERedeDeclineMessage(pixResult) || 'Não foi possível gerar o QR Code Pix');
+      }
+      if (!pixInfo.qrCodeData && !pixInfo.qrCodeImage) {
+        throw new Error('Não foi possível gerar o QR Code Pix. Tente novamente.');
+      }
+
+      const pedidoPix = {
+        ...pedidoBase,
+        status: 'pendente',
+        forma_pagamento: 'pix',
+        erede_reference: pixReference,
+        erede_tid: pixInfo.tid || null,
+        erede_return_code: pixReturnCode || null,
+        erede_return_message: getERedeResultField(pixResult, 'returnMessage') || null
+      };
+
+      const { data: createdOrder, error: dbError } = await insertPedidoWithSchemaFallback(pedidoPix);
+      if (dbError) throw dbError;
+
+      showPixPaymentOverlay({
+        total,
+        qrCodeData: pixInfo.qrCodeData,
+        qrCodeImage: pixInfo.qrCodeImage
+      });
+      startPixPaymentPolling(pixReference, createdOrder?.id);
+
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-lock"></i> Finalizar Pedido';
+      return;
+    }
+
+    let result;
+    let cardDataForOptionalSave = null;
+
+    if (savedCardData && !useNewCard && paymentOnlineMethod === 'credito') {
+      // Usar cartão salvo (token) — somente crédito
       result = await callERedeEdgeTransaction({
         capture: true,
-        kind: 'credit',
+        kind: cardKind,
         reference: orderNSU,
         amount,
         cardToken: savedCardData.token
@@ -2214,36 +2823,12 @@ async function handleCheckout() {
       }
       result = await callERedeEdgeTransaction({
         capture: true,
-        kind: 'credit',
+        kind: cardKind,
         reference: orderNSU,
         amount,
         ...cardData
       });
-      // Salvar cartão se checkbox marcado
-      if ($('chkSaveCard')?.checked && currentUser && eredeTokenizationEnabled) {
-        const rc = normalizeERedeReturnCode(result);
-        if (rc === '00') {
-          const last4 = result.last4 || cardData.cardNumber.slice(-4);
-          const brand = result.brand?.name || '';
-          const expiry = `${cardData.expirationMonth}/${String(cardData.expirationYear).slice(-2)}`;
-          try {
-            const tokenResult = await callERedeTokenize(cardData, currentUser.email);
-            const savedToken = extractTokenizationId(tokenResult);
-            if (savedToken) {
-              await saveSavedCardToProfile(savedToken, last4, brand, expiry);
-            } else {
-              console.warn('[Cartão salvo] Resposta sem token:', tokenResult);
-              showToast('Pagamento aprovado, mas não foi possível salvar o cartão.', 'error');
-            }
-          } catch (tokenErr) {
-            console.warn('[Cart\u00e3o salvo] Tokeniza\u00e7\u00e3o falhou (n\u00e3o cr\u00edtico):', tokenErr);
-            if (isERedeTokenizationNotEnabledError(tokenErr)) {
-              disableTokenizationForCurrentMerchant();
-              showToast('Compra aprovada. O Cofre de Cartões da e-Rede não está habilitado para este PV, então salvar cartão foi desativado.', 'error');
-            }
-          }
-        }
-      }
+      cardDataForOptionalSave = cardData;
     }
 
     const returnCode = normalizeERedeReturnCode(result);
@@ -2263,7 +2848,7 @@ async function handleCheckout() {
       nome_cliente: currentUser.user_metadata?.name || currentUser.email,
       telefone_cliente: currentUser.user_metadata?.phone || '',
       email_cliente: currentUser.email,
-      cpf_cliente: cpfCliente || null,
+      cpf_cliente: null,
       endereco_entrega: enderecoEntrega,
       ...structuredAddress,
       forma_pagamento: formaPagamento,
@@ -2276,6 +2861,13 @@ async function handleCheckout() {
       observacoes: obs,
       forma_entrega: deliveryType,
       origem: 'site',
+      agendamento_entrega: (() => {
+        if (deliveryType !== 'domo_home' || !$('domoAgend')?.value) return null;
+        const [h, m] = $('domoAgend').value.split(':').map(Number);
+        const d = new Date(); d.setHours(h, m, 0, 0);
+        if (d < new Date(Date.now() + DOMO_SCHED_MIN_MINUTES * 60 * 1000)) d.setDate(d.getDate() + 1);
+        return d.toISOString();
+      })(),
       coupon_code: appliedCoupon?.code || null,
       coupon_discount: discount,
       coupon_meta: appliedCoupon ? {
@@ -2289,6 +2881,9 @@ async function handleCheckout() {
     await trackPromotionConversion(appliedCoupon, createdOrder?.id || null).catch(() => {});
     if (appliedCoupon?.id) await increaseCouponUsage(appliedCoupon.id);
 
+    // Pagamento online confirmado ? enviar para Saipos automaticamente (server-side)
+    if (createdOrder?.id) autoEnviarParaSaipos(createdOrder.id);
+
     // Save address for future orders
     if (deliveryType === 'delivery') await saveAddressToUser();
 
@@ -2300,7 +2895,13 @@ async function handleCheckout() {
     clearCouponState();
     clearOnlinePaymentFields();
     $('successOverlay').classList.remove('hidden');
+    btn.disabled = false;
     btn.innerHTML = '<i class="fas fa-lock"></i> Finalizar Pedido';
+
+    // Salvar cartão em segundo plano (não bloqueia nem exibe erro após pagamento aprovado)
+    if (cardDataForOptionalSave) {
+      trySaveCardAfterSuccessfulCheckout(cardDataForOptionalSave, result);
+    }
   } catch (err) {
     console.error('Checkout error:', err);
     const msg = String(err?.message || '').trim();
@@ -2357,11 +2958,12 @@ function updateOrderCardRealtime(updatedOrder) {
 
 function buildOrderPaymentLabel(forma_pagamento) {
   const fp = String(forma_pagamento || '').toLowerCase();
-  if (fp === 'erede' || fp === 'credit_card') return { icon: 'fa-credit-card', label: 'Cartão de Crédito' };
+  if (fp === 'erede' || fp === 'erede_credito' || fp === 'credit_card') return { icon: 'fa-credit-card', label: 'Cartão de Crédito' };
+  if (fp === 'erede_debito') return { icon: 'fa-credit-card', label: 'Cartão de Débito' };
   if (fp === 'na_entrega_dinheiro') return { icon: 'fa-money-bill-wave', label: 'Dinheiro na Entrega' };
   if (fp === 'na_entrega_cartao')   return { icon: 'fa-credit-card', label: 'Cartão na Entrega' };
   if (fp === 'na_entrega_pix')      return { icon: 'fa-qrcode', label: 'Pix na Entrega' };
-  if (fp === 'pix')                 return { icon: 'fa-qrcode', label: 'Pix' };
+  if (fp === 'pix')                 return { icon: 'fa-qrcode', label: 'Pix Online' };
   if (fp.startsWith('na_entrega'))  return { icon: 'fa-hand-holding-usd', label: 'Pagar na Entrega' };
   return { icon: 'fa-credit-card', label: forma_pagamento || '—' };
 }
@@ -2371,6 +2973,7 @@ function buildOrderETA(order) {
   const isMesa = String(order.canal_venda || '').toLowerCase() === 'mesa';
   const isDelivery = order.forma_entrega === 'delivery';
   const isRetirada = order.forma_entrega === 'retirada';
+  const isDomoHome = order.forma_entrega === 'domo_home';
 
   if (isMesa || status === 'cancelado' || status === 'entregue' || status === 'aguardando_pagamento') return '';
 
@@ -2382,7 +2985,7 @@ function buildOrderETA(order) {
   const etaMax = new Date(created.getTime() + maxTime * 60000);
   const fmt = d => d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
-  if (status === 'saiu_entrega' && isDelivery) {
+  if (status === 'saiu_entrega' && (isDelivery || isDomoHome)) {
     return `<div class="order-card__eta order-card__eta--enroute">
       <i class="fas fa-motorcycle"></i>
       <span>Seu pedido está <strong>em rota</strong> e chega em breve!</span>
@@ -2390,16 +2993,16 @@ function buildOrderETA(order) {
   }
 
   if (status === 'preparando') {
-    if (isDelivery) {
+    if (isDelivery || isDomoHome) {
       return `<div class="order-card__eta">
         <i class="fas fa-clock"></i>
-        <span>Previsão de entrega: <strong>${fmt(etaMin)} – ${fmt(etaMax)}</strong></span>
+        <span>Previsão de entrega: <strong>${fmt(etaMin)} — ${fmt(etaMax)}</strong></span>
       </div>`;
     }
     if (isRetirada) {
       return `<div class="order-card__eta">
         <i class="fas fa-clock"></i>
-        <span>Pronto para retirada entre <strong>${fmt(etaMin)} – ${fmt(etaMax)}</strong></span>
+        <span>Pronto para retirada entre <strong>${fmt(etaMin)} — ${fmt(etaMax)}</strong></span>
       </div>`;
     }
   }
@@ -2415,6 +3018,7 @@ function buildOrderTypeTag(order) {
   }
   if (order.forma_entrega === 'delivery') return `<span class="order-type-tag"><i class="fas fa-motorcycle"></i> Delivery</span>`;
   if (order.forma_entrega === 'retirada') return `<span class="order-type-tag"><i class="fas fa-store"></i> Retirada</span>`;
+  if (order.forma_entrega === 'domo_home') return `<span class="order-type-tag"><i class="fas fa-building"></i> Domo Home</span>`;
   return '';
 }
 
@@ -2438,6 +3042,10 @@ function buildOrderCardHtml(order) {
   const payment = buildOrderPaymentLabel(order.forma_pagamento);
   const typeTag = buildOrderTypeTag(order);
   const eta = buildOrderETA(order);
+  const orderIsNew = (typeof isOrderNew === 'function') ? isOrderNew(order) : false;
+  // Reuse global badge styles so animation/visuals are consistent
+  const newBadge = orderIsNew ? '<span class="badge badge--new" data-new-badge="1">Novo</span>' : '';
+  const cardNewClass = orderIsNew ? ' order-card--new' : '';
 
   const itemsHtml = items.map(i => {
     const subtotal = (Number(i.preco || 0) * Number(i.qty || 0));
@@ -2449,7 +3057,7 @@ function buildOrderCardHtml(order) {
   }).join('');
 
   return `
-    <div class="order-card" data-order-id="${order.id}">
+    <div class="order-card${cardNewClass}" data-order-id="${order.id}">
       <div class="order-card__accent"></div>
       <div class="order-card__header">
         <div class="order-card__meta">
@@ -2458,6 +3066,7 @@ function buildOrderCardHtml(order) {
         </div>
         <div class="order-card__badges">
           ${typeTag}
+          ${newBadge}
           <span class="order-card__status order-card__status--${statusKey}"><i class="fas ${statusIco}"></i> ${statusLbl}</span>
         </div>
       </div>
@@ -2471,6 +3080,908 @@ function buildOrderCardHtml(order) {
       </div>
     </div>`;
 }
+
+// ============================================================
+//  IMPRESSÃO — CONFIGURAÇÕES & FUNÇÕES
+// ============================================================
+const _PRINT_CONFIG_KEY = 'print_settings';
+let _printSettingsCache = null;
+const DEFAULT_PRINT_LAYOUT = {
+  layoutMode: 'visual',
+  layoutStyle: 'classic',
+  brandName: '',
+  kitchenTitle: 'VIA COZINHA',
+  kitchenSubtitle: 'Comanda de preparo',
+  kitchenShowOrderType: true,
+  kitchenShowNotes: true,
+  kitchenFooter: '',
+  billTitle: 'NOTA / CUPOM',
+  billSubtitle: 'Pedido para entrega',
+  billShowCustomer: true,
+  billShowPhone: true,
+  billShowAddress: true,
+  billShowPayment: true,
+  billShowTotals: true,
+  billShowNotes: true,
+  billFooter: 'Obrigado pela preferência!',
+  // Personalização de fonte - Título da Nota
+  billTitleFontFamily: 'Arial Narrow, Arial, sans-serif',
+  billTitleFontSize: '18',
+  billTitleFontWeight: '800',
+  billTitleFontStyle: 'normal',
+  billTitleColor: '#000000',
+  billTitleLetterSpacing: '1.5',
+  billTitleLineHeight: '1.2',
+  // Personalização de fonte - Subtítulo da Nota
+  billSubtitleFontFamily: 'Arial Narrow, Arial, sans-serif',
+  billSubtitleFontSize: '15',
+  billSubtitleFontWeight: '700',
+  billSubtitleFontStyle: 'normal',
+  billSubtitleColor: '#000000',
+  billSubtitleLetterSpacing: '0.5',
+  billSubtitleLineHeight: '1.3',
+  // Personalização de fonte - Corpo da Nota
+  billBodyFontFamily: 'Arial Narrow, Arial, sans-serif',
+  billBodyFontSize: '13',
+  billBodyFontWeight: '700',
+  billBodyFontStyle: 'normal',
+  billBodyColor: '#000000',
+  billBodyLetterSpacing: '0.4',
+  billBodyLineHeight: '1.45',
+  // Personalização de fonte - Rodapé da Nota
+  billFooterFontFamily: 'Arial Narrow, Arial, sans-serif',
+  billFooterFontSize: '11',
+  billFooterFontWeight: '400',
+  billFooterFontStyle: 'normal',
+  billFooterColor: '#000000',
+  billFooterLetterSpacing: '0.4',
+  billFooterLineHeight: '1.3'
+};
+
+function getPrintSettingsDefaults() {
+  return {
+    autoPrint: false,
+    printKitchen: true,
+    printBill: true,
+    kitchenPrinterMode: 'windows',
+    billPrinterMode: 'windows',
+    kitchenPrinter: '',
+    billPrinter: '',
+    kitchenTemplate: '',
+    billTemplate: '',
+    layoutMode: 'blocks',
+    printLayout: {
+      ...DEFAULT_PRINT_LAYOUT,
+      billBlocks: window.PrintStudio?.DEFAULT_BILL_BLOCKS || null,
+      kitchenBlocks: window.PrintStudio?.DEFAULT_KITCHEN_BLOCKS || null
+    }
+  };
+}
+
+async function loadSiteConfigValue(key) {
+  try {
+    const { data } = await supabaseClient.from('site_config').select('value').eq('key', key).maybeSingle();
+    return data?.value || '';
+  } catch (err) {
+    console.error('[print-settings] loadSiteConfigValue error:', err);
+    return '';
+  }
+}
+
+async function saveSiteConfigKey(key, value) {
+  try {
+    const { data: updated, error: updErr } = await supabaseClient
+      .from('site_config')
+      .update({ value })
+      .eq('key', key)
+      .select('key');
+    if (updErr) {
+      console.error('[print-settings] saveSiteConfigKey update error:', updErr);
+      return;
+    }
+    if (!updated || updated.length === 0) {
+      const { error: insErr } = await supabaseClient.from('site_config').insert({ key, value, type: 'json', label: key, section: 'app' });
+      if (insErr) console.error('[print-settings] saveSiteConfigKey insert error:', insErr);
+    }
+  } catch (err) {
+    console.error('[print-settings] saveSiteConfigKey error:', err);
+  }
+}
+
+function getPrintSettings() {
+  if (!_printSettingsCache) {
+    return getPrintSettingsDefaults();
+  }
+  return { ...getPrintSettingsDefaults(), ..._printSettingsCache };
+}
+
+async function loadPrintSettingsFromDb() {
+  try {
+    const rawValue = await loadSiteConfigValue(_PRINT_CONFIG_KEY);
+    if (rawValue) {
+      let parsed = rawValue;
+      if (typeof rawValue === 'string') {
+        parsed = JSON.parse(rawValue);
+      }
+      if (parsed && typeof parsed === 'object') {
+        _printSettingsCache = { ...getPrintSettingsDefaults(), ...parsed };
+        return _printSettingsCache;
+      }
+    }
+  } catch (err) {
+    console.error('[print-settings] erro ao carregar do Supabase:', err);
+  }
+
+  _printSettingsCache = getPrintSettingsDefaults();
+  return _printSettingsCache;
+}
+
+function getPrintLayoutSettings() {
+  const s = getPrintSettings();
+  const pl = { ...DEFAULT_PRINT_LAYOUT, ...(s.printLayout || {}) };
+  if ((!pl.billBlocks || !pl.billBlocks.length) && window.PrintStudio?.DEFAULT_BILL_BLOCKS) {
+    pl.billBlocks = JSON.parse(JSON.stringify(window.PrintStudio.DEFAULT_BILL_BLOCKS));
+  }
+  if ((!pl.kitchenBlocks || !pl.kitchenBlocks.length) && window.PrintStudio?.DEFAULT_KITCHEN_BLOCKS) {
+    pl.kitchenBlocks = JSON.parse(JSON.stringify(window.PrintStudio.DEFAULT_KITCHEN_BLOCKS));
+  }
+  return pl;
+}
+
+function _resolvePrinterName(kind) {
+  const s = getPrintSettings();
+  if (kind === 'kitchen') {
+    return s.kitchenPrinterMode === 'named' && s.kitchenPrinter ? s.kitchenPrinter.trim() : '';
+  }
+  return s.billPrinterMode === 'named' && s.billPrinter ? s.billPrinter.trim() : '';
+}
+
+async function _savePrintSettings(s) {
+  _printSettingsCache = { ...getPrintSettingsDefaults(), ...s };
+  await saveSiteConfigKey(_PRINT_CONFIG_KEY, JSON.stringify(_printSettingsCache));
+}
+
+window.toggleAutoPrint = async function() {
+  const s = getPrintSettings();
+  s.autoPrint = !s.autoPrint;
+  await _savePrintSettings(s);
+  updatePrintBarUI();
+  if ($('printAutoPrintToggle')) $('printAutoPrintToggle').checked = s.autoPrint;
+};
+
+window.savePrintOpt = async function() {
+  const s = getPrintSettings();
+  s.printKitchen = !!$('printOptKitchen')?.checked;
+  s.printBill    = !!$('printOptBill')?.checked;
+  await _savePrintSettings(s);
+};
+
+// Lista de impressoras térmicas comuns usadas no Brasil (sugestões base do datalist)
+const _KNOWN_PRINTERS = [
+  'Epson TM-T20X','Epson TM-T20III','Epson TM-T88VII','Epson TM-T88VI','Epson TM-T88V',
+  'Bematech MP-4200 TH','Bematech MP-100S TH','Bematech MP-2800 TH',
+  'Elgin i9 Full','Elgin i7','Daruma DR800 L','Daruma DR700 L',
+  'Tanca TP-550','Tanca TP-650','Gertec G250','Sweda SI-300S',
+  'Microsoft Print to PDF'
+];
+
+// Retorna lista única de impressoras: salvas anteriormente + modelos conhecidos
+function _getPrinterSuggestions() {
+  const s = getPrintSettings();
+  const used = [s.kitchenPrinter, s.billPrinter].filter(Boolean);
+  return [...new Set([...used, ..._KNOWN_PRINTERS])];
+}
+
+async function loadPrinterConfigPage() {
+  if (!_printSettingsCache) {
+    await loadPrintSettingsFromDb();
+  }
+  const s = getPrintSettings();
+  if (window.PrintStudio) {
+    window.PrintStudio.init(s);
+  } else {
+    updatePrintLayoutPreview('bill');
+  }
+}
+
+window.openPrinterConfig = async function() {
+  await loadPrinterConfigPage();
+  setActiveAdminPage('print-layout');
+};
+
+window.setPrintLayoutStyle = function(style) {
+  $$('[data-print-style]').forEach(btn => btn.classList.toggle('is-active', btn.dataset.printStyle === style));
+  const hidden = $('printLayoutStyle');
+  if (hidden) hidden.value = style;
+  window._currentPrintLayoutStyle = style;
+  updatePrintLayoutPreview(window._currentPrintLayoutPreview || 'bill');
+};
+
+window.setPrintLayoutPreviewType = function(type) {
+  $$('[data-preview-type]').forEach(btn => btn.classList.toggle('is-active', btn.dataset.previewType === type));
+  window._currentPrintLayoutPreview = type;
+  updatePrintLayoutPreview(type);
+};
+
+window.collectPrintLayoutSettings = function() {
+  return {
+    layoutStyle: $('printLayoutStyle')?.value || 'classic',
+    brandName: $('printBrandName')?.value || '',
+    kitchenTitle: $('printKitchenTitle')?.value || 'VIA COZINHA',
+    kitchenSubtitle: $('printKitchenSubtitle')?.value || 'Comanda de preparo',
+    kitchenShowOrderType: !!$('printKitchenShowOrderType')?.checked,
+    kitchenShowNotes: !!$('printKitchenShowNotes')?.checked,
+    kitchenFooter: $('printKitchenFooter')?.value || '',
+    billTitle: $('printBillTitle')?.value || 'NOTA / CUPOM',
+    billSubtitle: $('printBillSubtitle')?.value || 'Pedido para entrega',
+    billShowCustomer: !!$('printBillShowCustomer')?.checked,
+    billShowPhone: !!$('printBillShowPhone')?.checked,
+    billShowAddress: !!$('printBillShowAddress')?.checked,
+    billShowPayment: !!$('printBillShowPayment')?.checked,
+    billShowTotals: !!$('printBillShowTotals')?.checked,
+    billShowNotes: !!$('printBillShowNotes')?.checked,
+    billFooter: $('printBillFooter')?.value || 'Obrigado pela preferência!',
+    // Personalização de fonte - Título
+    billTitleFontFamily: $('printBillTitleFontFamily')?.value || 'Arial Narrow, Arial, sans-serif',
+    billTitleFontSize: $('printBillTitleFontSize')?.value || '18',
+    billTitleFontWeight: $('printBillTitleFontWeight')?.value || '800',
+    billTitleFontStyle: $('printBillTitleFontStyle')?.value || 'normal',
+    billTitleColor: $('printBillTitleColor')?.value || '#000000',
+    billTitleLetterSpacing: $('printBillTitleLetterSpacing')?.value || '1.5',
+    billTitleLineHeight: '1.2',
+    // Personalização de fonte - Subtítulo
+    billSubtitleFontFamily: $('printBillSubtitleFontFamily')?.value || 'Arial Narrow, Arial, sans-serif',
+    billSubtitleFontSize: $('printBillSubtitleFontSize')?.value || '15',
+    billSubtitleFontWeight: $('printBillSubtitleFontWeight')?.value || '700',
+    billSubtitleFontStyle: $('printBillSubtitleFontStyle')?.value || 'normal',
+    billSubtitleColor: $('printBillSubtitleColor')?.value || '#000000',
+    billSubtitleLetterSpacing: $('printBillSubtitleLetterSpacing')?.value || '0.5',
+    billSubtitleLineHeight: '1.3',
+    // Personalização de fonte - Corpo
+    billBodyFontFamily: $('printBillBodyFontFamily')?.value || 'Arial Narrow, Arial, sans-serif',
+    billBodyFontSize: $('printBillBodyFontSize')?.value || '13',
+    billBodyFontWeight: $('printBillBodyFontWeight')?.value || '700',
+    billBodyFontStyle: $('printBillBodyFontStyle')?.value || 'normal',
+    billBodyColor: $('printBillBodyColor')?.value || '#000000',
+    billBodyLetterSpacing: $('printBillBodyLetterSpacing')?.value || '0.4',
+    billBodyLineHeight: '1.45',
+    // Personalização de fonte - Rodapé
+    billFooterFontFamily: $('printBillFooterFontFamily')?.value || 'Arial Narrow, Arial, sans-serif',
+    billFooterFontSize: $('printBillFooterFontSize')?.value || '11',
+    billFooterFontWeight: $('printBillFooterFontWeight')?.value || '400',
+    billFooterFontStyle: $('printBillFooterFontStyle')?.value || 'normal',
+    billFooterColor: $('printBillFooterColor')?.value || '#000000',
+    billFooterLetterSpacing: $('printBillFooterLetterSpacing')?.value || '0.4',
+    billFooterLineHeight: '1.3'
+  };
+};
+
+window.updatePrintLayoutPreview = function(type = 'bill') {
+  const sample = window._PRINT_PREVIEW_SAMPLE_ORDER || _PRINT_PREVIEW_SAMPLE_ORDER;
+  const html = type === 'kitchen' ? _buildKitchenHtml(sample) : _buildBillHtml(sample);
+  const frame = $('printerPreviewFrame');
+  if (frame) frame.srcdoc = html;
+  if (window.PrintStudio?.renderEditorPreview) {
+    window.PrintStudio.setDocType(type);
+  }
+};
+
+// Renderiza chips de sugestão rápida abaixo do input
+window.renderPrinterChips = function(type) {
+  const inputId  = type === 'kitchen' ? 'printerNameKitchen' : 'printerNameBill';
+  const chipsId  = type === 'kitchen' ? 'chipsKitchen'       : 'chipsBill';
+  const input    = $(inputId);
+  const container = $(chipsId);
+  if (!container || !input) return;
+
+  const query   = (input.value || '').toLowerCase();
+  const all     = _getPrinterSuggestions();
+  // filtra pelo que foi digitado, ou mostra todos se vazio
+  const matches = query
+    ? all.filter(p => p.toLowerCase().includes(query))
+    : all;
+
+  if (!matches.length) { container.innerHTML = ''; return; }
+
+  container.innerHTML = matches.map(name =>
+    `<button type="button" class="printer-chip${input.value === name ? ' printer-chip--active' : ''}"
+      onclick="selectPrinterChip('${type}','${name.replace(/'/g,"\\'")}')">
+      ${escapeHtml(name)}
+    </button>`
+  ).join('');
+};
+
+window.selectPrinterChip = function(type, name) {
+  const inputId = type === 'kitchen' ? 'printerNameKitchen' : 'printerNameBill';
+  const input   = $(inputId);
+  if (input) input.value = name;
+  renderPrinterChips(type);
+};
+
+window.closePrinterConfig = function() {
+  // no-op for page-based print layout settings
+};
+
+window.savePrinterNames = async function() {
+  const s = getPrintSettings();
+  if (window.PrintStudio) {
+    Object.assign(s, window.PrintStudio.collectPrinterPayload());
+    s.layoutMode = 'blocks';
+    s.printLayout = { ...(s.printLayout || {}), ...window.PrintStudio.collectLayoutPayload() };
+  } else {
+    s.layoutMode = 'visual';
+    s.printLayout = window.collectPrintLayoutSettings?.() || s.printLayout;
+  }
+  await _savePrintSettings(s);
+  updatePrintBarUI();
+  showToast('Configurações de impressão salvas!', 'success');
+  updatePrintLayoutPreview(window._currentPrintLayoutPreview || 'bill');
+};
+
+window.openPrintLayoutEditor = async function() {
+  await loadPrinterConfigPage();
+  setActiveAdminPage('print-layout');
+  setTimeout(() => {
+    const focusTarget = $('printKitchenTitle') || $('printBrandName') || $('printerNameKitchen');
+    if (focusTarget) {
+      focusTarget.focus();
+      focusTarget.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      focusTarget.style.transition = 'box-shadow 0.4s';
+      focusTarget.style.boxShadow = '0 0 0 3px rgba(66,133,244,0.18)';
+      setTimeout(() => { focusTarget.style.boxShadow = ''; }, 900);
+    }
+  }, 120);
+};
+
+const btnEditPrintLayout = $('btnEditPrintLayout');
+if (btnEditPrintLayout) {
+  btnEditPrintLayout.addEventListener('click', openPrintLayoutEditor);
+}
+
+// Apply a user-defined template (simple placeholder replacement).
+function _applyPrintTemplate(template, order, type) {
+  if (!template || !template.trim()) return null;
+  const items = Array.isArray(order.itens) ? order.itens : [];
+  // plain items list
+  const itemsPlain = items.map(i => `${i.qty}x ${i.nome}`).join('\n');
+  // HTML rows
+  const itemsRows = items.map(i => {
+    const price = Number(i.preco || 0) * Number(i.qty || 0);
+    return `<div class="row"><span class="iq">${i.qty}x</span><span class="in">${escapeHtml(String(i.nome||''))}</span><span class="ip">${formatMoney(price)}</span></div>`;
+  }).join('\n');
+
+  const map = {
+    order_id: order.id || '',
+    date: new Date(order.created_at).toLocaleString('pt-BR'),
+    customer_name: escapeHtml(order.nome_cliente || ''),
+    phone: escapeHtml(order.telefone_cliente || ''),
+    address: escapeHtml(order.endereco_entrega || ''),
+    subtotal: formatMoney(Number(order.valor_subtotal || 0)),
+    fee: formatMoney(Number(order.valor_entrega || 0)),
+    discount: formatMoney(Number(order.valor_desconto || 0)),
+    total: formatMoney(Number(order.total || 0)),
+    payment_method: escapeHtml(String(order.forma_pagamento || '')),
+    items: escapeHtml(itemsPlain),
+    items_rows: itemsRows,
+    obs: escapeHtml(order.observacoes || '')
+  };
+
+  let out = template;
+  out = out.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (m, key) => {
+    return map[key] != null ? map[key] : '';
+  });
+
+  // wrap if not full HTML
+  if (!/\<html/i.test(out)) {
+    const style = `
+      <style>
+        body{font-family:'Arial Narrow',Arial,sans-serif;font-size:13px;color:#000}
+        .row{display:flex;margin:4px 0}.iq{min-width:28px;font-weight:700}.in{flex:1}.ip{min-width:58px;text-align:right}
+      </style>`;
+    out = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">${style}</head><body>${out}</body></html>`;
+  }
+  return out;
+}
+
+function _buildKitchenHtmlFromLayout(order, s) {
+  const layout = { ...DEFAULT_PRINT_LAYOUT, ...(s.printLayout || {}) };
+  const styleMode = layout.layoutStyle || 'classic';
+  const isCompact = styleMode === 'compact';
+  const isModern = styleMode === 'modern';
+  const items = Array.isArray(order.itens) ? order.itens : [];
+  const date = new Date(order.created_at).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  const isMesa = String(order.canal_venda || '').toLowerCase() === 'mesa';
+  const mesaMatch = (order.observacoes || '').match(/\[Mesa ([^\]]+)\]/);
+  const mesaNum = mesaMatch ? mesaMatch[1] : null;
+  const tipoMap = { delivery:'DELIVERY', retirada:'RETIRADA NO BALCÃO', domo_home:'DOMO HOME' };
+  const tipoLabel = isMesa && mesaNum ? `MESA ${mesaNum}` : (tipoMap[order.forma_entrega] || String(order.forma_entrega || 'DELIVERY').toUpperCase());
+  const obs = (order.observacoes || '').replace(/\[Mesa [^\]]+\]/, '').trim();
+  const rows = items.map(i => `<tr><td class="qty">${i.qty}x</td><td class="nome">${escapeHtml(String(i.nome || ''))}</td></tr>`).join('');
+  const titleStyle = isCompact ? 'font-size:16px;' : isModern ? 'font-size:20px;letter-spacing:1px;' : 'font-size:18px;letter-spacing:1.5px;';
+  const subtitleStyle = isCompact ? 'font-size:12px;' : isModern ? 'font-size:14px;' : 'font-size:15px;';
+  const bodySize = isCompact ? '12px' : '14px';
+  const separator = isModern ? 'border-top:1px solid #b3b3b3' : 'border-top:1px dashed #000';
+  const footerSize = isCompact ? '10px' : '11px';
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>${escapeHtml(layout.kitchenTitle)}</title><style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Arial Narrow',Arial,sans-serif;font-size:${bodySize};width:78mm;padding:6mm;background:#fff;color:#000;line-height:1.45}
+  .c{text-align:center}.b{font-weight:700}
+  hr.d{border:none;${separator};margin:6px 0}
+  table{width:100%;border-collapse:collapse}
+  .qty{width:30px;font-weight:700;vertical-align:top;padding-top:2px;font-size:${bodySize}}
+  .nome{vertical-align:top;padding:4px 0;line-height:1.4;font-weight:700;letter-spacing:.4px;font-size:${bodySize}}
+  .header-large{${titleStyle}font-weight:800;margin-bottom:4px}
+  .header-medium{${subtitleStyle}font-weight:700;margin-bottom:3px}
+  .footer-small{font-size:${footerSize};letter-spacing:.4px;margin-top:8px}
+  @media print{#__pb{display:none!important}html,body{width:78mm}@page{size:78mm auto;margin:0}}
+</style></head><body>
+  <div class="c header-large">${escapeHtml(layout.kitchenTitle)}</div>
+  <div class="c header-medium">${escapeHtml(layout.kitchenSubtitle)}</div>
+  ${layout.brandName ? `<div class="c" style="font-size:${bodySize};margin-top:6px;">${escapeHtml(layout.brandName)}</div>` : ''}
+  <hr class="d">
+  <div class="c" style="font-size:${bodySize};">${date}</div>
+  ${layout.kitchenShowOrderType ? `<div class="c" style="font-size:${bodySize};margin-top:6px;letter-spacing:.5px;">${escapeHtml(tipoLabel)}</div><hr class="d">` : ''}
+  <table>${rows}</table>
+  ${layout.kitchenShowNotes && obs ? `<hr class="d"><div style="font-size:${bodySize};margin-top:4px;"><span class="b">Obs:</span> ${escapeHtml(obs)}</div>` : ''}
+  ${layout.kitchenFooter ? `<hr class="d"><div class="c footer-small">${escapeHtml(layout.kitchenFooter)}</div>` : ''}
+</body></html>`;
+}
+
+function _buildBillHtmlFromLayout(order, s) {
+  const layout = { ...DEFAULT_PRINT_LAYOUT, ...(s.printLayout || {}) };
+  const styleMode = layout.layoutStyle || 'classic';
+  const isCompact = styleMode === 'compact';
+  const isModern = styleMode === 'modern';
+  const items = Array.isArray(order.itens) ? order.itens : [];
+  const date = new Date(order.created_at).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  const isMesa = String(order.canal_venda || '').toLowerCase() === 'mesa';
+  const mesaMatch = (order.observacoes || '').match(/\[Mesa ([^\]]+)\]/);
+  const mesaNum = mesaMatch ? mesaMatch[1] : null;
+  const tipoMap = { delivery:'DELIVERY', retirada:'RETIRADA NO BALCÃO', domo_home:'DOMO HOME' };
+  const tipoLabel = isMesa && mesaNum ? `PEDIDO NA MESA: ${mesaNum}` : (tipoMap[order.forma_entrega] || String(order.forma_entrega || 'DELIVERY').toUpperCase());
+  const subtotal = Number(order.valor_subtotal || 0) || items.reduce((sum, item) => sum + (Number(item.preco || 0) * Number(item.qty || 0)), 0);
+  const fee = Number(order.valor_entrega || 0);
+  const discount = Number(order.valor_desconto || 0);
+  const total = Number(order.total || 0);
+  const payMap = {
+    erede: 'Crédito online',
+    erede_debito: 'Débito online',
+    pix: 'Pix online',
+    na_entrega_dinheiro: 'Dinheiro',
+    na_entrega_cartao: 'Cartão',
+    na_entrega_pix: 'Pix'
+  };
+  const payLabel = payMap[String(order.forma_pagamento || '').toLowerCase()] || (order.forma_pagamento || '');
+  const obs = (order.observacoes || '').replace(/\[Mesa [^\]]+\]/, '').trim();
+  const rows = items.map(i => `<div class="row"><span class="iq">${i.qty}x</span><span class="in">${escapeHtml(String(i.nome || ''))}</span><span class="ip">${formatMoney(Number(i.preco || 0) * Number(i.qty || 0))}</span></div>`).join('');
+  const restaurantName = cfg('restaurant_name') || 'Casa José Silva';
+  const addressParts = [cfg('address'), cfg('neighborhood'), cfg('city') + (cfg('state') ? ' - ' + cfg('state') : '')].filter(Boolean);
+  const cnpj = cfg('cnpj') || '';
+  
+  // Valores padrão baseados no estilo
+  const defaultBodySize = isCompact ? '12' : '13';
+  const defaultFooterSize = isCompact ? '10' : '11';
+  const separator = isModern ? 'border-top:1px solid #b3b3b3' : 'border-top:1px dashed #000';
+  
+  // Construir estilos personalizados para Título
+  const titleFontFamily = layout.billTitleFontFamily || 'Arial Narrow, Arial, sans-serif';
+  const titleFontSize = layout.billTitleFontSize || '18';
+  const titleFontWeight = layout.billTitleFontWeight || '800';
+  const titleFontStyle = layout.billTitleFontStyle || 'normal';
+  const titleColor = layout.billTitleColor || '#000000';
+  const titleLetterSpacing = layout.billTitleLetterSpacing || '1.5';
+  const titleStyle = `font-family:'${titleFontFamily}';font-size:${titleFontSize}px;font-weight:${titleFontWeight};font-style:${titleFontStyle};color:${titleColor};letter-spacing:${titleLetterSpacing}px;`;
+  
+  // Construir estilos personalizados para Subtítulo
+  const subtitleFontFamily = layout.billSubtitleFontFamily || 'Arial Narrow, Arial, sans-serif';
+  const subtitleFontSize = layout.billSubtitleFontSize || '15';
+  const subtitleFontWeight = layout.billSubtitleFontWeight || '700';
+  const subtitleFontStyle = layout.billSubtitleFontStyle || 'normal';
+  const subtitleColor = layout.billSubtitleColor || '#000000';
+  const subtitleLetterSpacing = layout.billSubtitleLetterSpacing || '0.5';
+  const subtitleStyle = `font-family:'${subtitleFontFamily}';font-size:${subtitleFontSize}px;font-weight:${subtitleFontWeight};font-style:${subtitleFontStyle};color:${subtitleColor};letter-spacing:${subtitleLetterSpacing}px;`;
+  
+  // Construir estilos personalizados para Corpo
+  const bodyFontFamily = layout.billBodyFontFamily || 'Arial Narrow, Arial, sans-serif';
+  const bodyFontSize = layout.billBodyFontSize || defaultBodySize;
+  const bodyFontWeight = layout.billBodyFontWeight || '700';
+  const bodyFontStyle = layout.billBodyFontStyle || 'normal';
+  const bodyColor = layout.billBodyColor || '#000000';
+  const bodyLetterSpacing = layout.billBodyLetterSpacing || '0.4';
+  const bodySize = bodyFontSize;
+  
+  // Construir estilos personalizados para Rodapé
+  const footerFontFamily = layout.billFooterFontFamily || 'Arial Narrow, Arial, sans-serif';
+  const footerFontSize = layout.billFooterFontSize || defaultFooterSize;
+  const footerFontWeight = layout.billFooterFontWeight || '400';
+  const footerFontStyle = layout.billFooterFontStyle || 'normal';
+  const footerColor = layout.billFooterColor || '#000000';
+  const footerLetterSpacing = layout.billFooterLetterSpacing || '0.4';
+  const footerSize = footerFontSize;
+  
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>${escapeHtml(layout.billTitle)}</title><style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'${bodyFontFamily}';font-size:${bodySize}px;width:78mm;padding:6mm;background:#fff;color:${bodyColor};line-height:1.45}
+  .c{text-align:center}.b{font-weight:700}
+  hr.d{border:none;${separator};margin:6px 0}
+  .row{display:flex;margin:4px 0;font-size:${bodySize}px}.iq{min-width:28px;font-weight:${bodyFontWeight};font-style:${bodyFontStyle};letter-spacing:${bodyLetterSpacing}px}.in{flex:1;line-height:1.4;letter-spacing:${bodyLetterSpacing}px;font-weight:${bodyFontWeight};font-style:${bodyFontStyle}}.ip{min-width:58px;text-align:right;font-weight:${bodyFontWeight};font-style:${bodyFontStyle}}
+  .header-large{${titleStyle}margin-bottom:4px}
+  .header-medium{${subtitleStyle}margin-bottom:3px}
+  .summary{display:flex;justify-content:space-between;margin:4px 0;font-size:${bodySize}px}
+  .summary.g{font-size:${isCompact ? '14px' : '15px'};font-weight:800;margin-top:6px}
+  .footer-small{font-family:'${footerFontFamily}';font-size:${footerSize}px;font-weight:${footerFontWeight};font-style:${footerFontStyle};color:${footerColor};letter-spacing:${footerLetterSpacing}px;margin-top:8px}
+  @media print{#__pb{display:none!important}html,body{width:78mm}@page{size:78mm auto;margin:0}}
+</style></head><body>
+  <div class="c header-large">${escapeHtml(layout.billTitle)}</div>
+  <div class="c header-medium">${escapeHtml(layout.billSubtitle)}</div>
+  ${restaurantName ? `<div class="c" style="font-size:${bodySize}px;margin-top:6px;">${escapeHtml(restaurantName)}</div>` : ''}
+  ${addressParts.length ? `<div class="c" style="font-size:${Math.max(10, Number(bodySize) - 1)}px;">${escapeHtml(addressParts.join(', '))}</div>` : ''}
+  ${cnpj ? `<div class="c" style="font-size:${Math.max(10, Number(bodySize) - 2)}px;">CNPJ: ${escapeHtml(cnpj)}</div>` : ''}
+  <hr class="d">
+  <div style="font-size:${bodySize}px;margin-top:4px;"><span class="b">Pedido n. </span>${escapeHtml(String(order.id || ''))}</div>
+  <div style="font-size:${bodySize}px;"><span class="b">Data: </span>${escapeHtml(date)}</div>
+  ${layout.billShowCustomer && order.nome_cliente ? `<div><span class="b">Cliente:</span> ${escapeHtml(order.nome_cliente)}</div>` : ''}
+  ${layout.billShowPhone && order.telefone_cliente ? `<div><span class="b">Telefone:</span> ${escapeHtml(order.telefone_cliente)}</div>` : ''}
+  ${order.cpf_cliente ? `<div><span class="b">CPF:</span> ${escapeHtml(order.cpf_cliente)}</div>` : ''}
+  ${layout.billShowAddress && order.endereco_entrega ? `<div><span class="b">Endereço:</span> ${escapeHtml(order.endereco_entrega)}</div>` : ''}
+  ${layout.billShowPayment && payLabel ? `<div><span class="b">Pagamento:</span> ${escapeHtml(payLabel)}</div>` : ''}
+  ${order.agendamento_entrega ? `<div><span class="b">Agendamento:</span> ${new Date(order.agendamento_entrega).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}</div>` : ''}
+  <div class="c" style="font-size:${bodySize}px;margin:8px 0;">${escapeHtml(tipoLabel)}</div>
+  <hr class="d">
+  <div class="b" style="margin-bottom:4px;">ITENS:</div>
+  ${rows}
+  ${layout.billShowTotals ? `<hr class="d"><div class="summary"><span>Subtotal</span><span>${formatMoney(subtotal)}</span></div>${fee ? `<div class="summary"><span>Entrega</span><span>${formatMoney(fee)}</span></div>` : ''}${discount ? `<div class="summary"><span>Desconto</span><span>${formatMoney(discount)}</span></div>` : ''}<div class="summary g"><span>TOTAL</span><span>${formatMoney(total)}</span></div>` : ''}
+  ${layout.billShowNotes && obs ? `<hr class="d"><div><span class="b">Obs:</span> ${escapeHtml(obs)}</div>` : ''}
+  ${layout.billFooter ? `<hr class="d"><div class="c footer-small">${escapeHtml(layout.billFooter)}</div>` : ''}
+</body></html>`;
+}
+
+// Sample order used for preview in modal
+const _PRINT_PREVIEW_SAMPLE_ORDER = {
+  id: 14955,
+  created_at: new Date().toISOString(),
+  nome_cliente: 'emporio casa jose silva',
+  telefone_cliente: '(11) 96566-5646',
+  cpf_cliente: '446.774.878-47',
+  endereco_entrega: 'Rua Exemplo, 123 - Centro',
+  itens: [
+    { id: 1, nome: 'Feijoada - Serve 4 pessoas (Somente de Quartas e Sabados)', preco: 89.99, qty: 1, categoria: 'Almoco - Serve 4 pessoas' },
+    { id: 2, nome: 'Picanha grelhada - 4 pessoas', preco: 129.99, qty: 1, categoria: 'Almoco - Serve 4 pessoas', obs: 'Somente picanha e batata frita' }
+  ],
+  valor_subtotal: 359.98,
+  valor_entrega: 0,
+  valor_desconto: 40,
+  total: 319.99,
+  forma_pagamento: 'na_entrega_dinheiro',
+  observacoes: 'Natalia 123 7',
+  forma_entrega: 'delivery',
+  canal_venda: 'mesa',
+  mesa: '0'
+};
+
+window.previewKitchenTemplate = function() {
+  _printOpen(_buildKitchenHtml(_PRINT_PREVIEW_SAMPLE_ORDER), 'auto', _resolvePrinterName('kitchen'));
+};
+
+window.previewBillTemplate = function() {
+  _printOpen(_buildBillHtml(_PRINT_PREVIEW_SAMPLE_ORDER), 'auto', _resolvePrinterName('bill'));
+};
+
+async function initializePrintTemplates() {
+  const s = getPrintSettings();
+  // default kitchen template
+  if (!s.kitchenTemplate) {
+    s.kitchenTemplate = `
+<div style="text-align:center;font-weight:700;font-size:16px;margin-bottom:6px;">VIA COZINHA</div>
+<div style="margin-bottom:6px;font-size:13px;">Pedido #{{order_id}} · {{date}}</div>
+<div style="margin:6px 0 8px;font-weight:700;">Itens:</div>
+{{items_rows}}
+<div style="margin-top:8px;font-size:12px;">Obs: {{obs}}</div>
+`;
+  }
+  // default bill template
+  if (!s.billTemplate) {
+    s.billTemplate = `
+<div style="text-align:center;font-weight:800;font-size:16px;margin-bottom:6px;">${escapeHtml(cfg('restaurant_name') || 'Casa José Silva')}</div>
+<div style="text-align:center;font-size:12px;margin-bottom:6px;">Nota · Pedido #{{order_id}} · {{date}}</div>
+<div style="margin:6px 0 8px;font-weight:700;">Itens:</div>
+{{items_rows}}
+<div style="margin-top:8px;font-size:13px;">Subtotal: {{subtotal}} · Entrega: {{fee}} · Desconto: {{discount}}</div>
+<div style="margin-top:6px;font-weight:800;font-size:15px;">TOTAL: {{total}}</div>
+<div style="margin-top:8px;font-size:12px;">Pagamento: {{payment_method}}</div>
+<div style="margin-top:6px;font-size:12px;">Endereço: {{address}}</div>
+<div style="margin-top:8px;font-size:12px;">Obs: {{obs}}</div>
+`;
+  }
+  await _savePrintSettings(s);
+}
+
+function updatePrintBarUI() {
+  const s = getPrintSettings();
+  const toggle = $('btnAutoPrint');
+  const status = $('autoPrintStatus');
+  const opts   = $('printBarOpts');
+  if (status) status.textContent = s.autoPrint ? 'ON' : 'OFF';
+  if (toggle) toggle.classList.toggle('print-bar__toggle--on', s.autoPrint);
+  if (opts)   opts.style.display = s.autoPrint ? 'flex' : 'none';
+  if ($('printOptKitchen')) $('printOptKitchen').checked = s.printKitchen !== false;
+  if ($('printOptBill'))    $('printOptBill').checked    = s.printBill    !== false;
+  if ($('printAutoPrintToggle')) $('printAutoPrintToggle').checked = !!s.autoPrint;
+  if ($('printOptKitchenStudio')) $('printOptKitchenStudio').checked = s.printKitchen !== false;
+  if ($('printOptBillStudio')) $('printOptBillStudio').checked = s.printBill !== false;
+
+  const cfgBtn = $('btnPrinterConfig');
+  if (cfgBtn) {
+    const parts = [];
+    if (s.kitchenPrinterMode === 'named' && s.kitchenPrinter) parts.push('Coz: ' + s.kitchenPrinter);
+    else if (s.printKitchen !== false) parts.push('Coz: Win');
+    if (s.billPrinterMode === 'named' && s.billPrinter) parts.push('Nota: ' + s.billPrinter);
+    else if (s.printBill !== false) parts.push('Nota: Win');
+    cfgBtn.innerHTML = `<i class="fas fa-cog"></i> <span class="print-bar__printer-names">${parts.length ? escapeHtml(parts.join(' · ')) : 'Impressão'}</span>`;
+  }
+}
+
+/* Impressão direta via iframe oculto (sem janela de pré-visualização do site).
+   printerName: referência da impressora configurada (no navegador usa diálogo do Windows). */
+function _printOpen(html, _mode, printerName) {
+  window._lastPrintPrinterName = printerName || '';
+  // Sempre imprime direto — ignora modo 'preview' legado
+  try {
+    const iframe = document.createElement('iframe');
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.style.position = 'absolute';
+    iframe.style.left = '-10000px';
+    iframe.style.top = '-10000px';
+    document.body.appendChild(iframe);
+
+    const idoc = iframe.contentDocument || iframe.contentWindow.document;
+    idoc.open();
+    idoc.write(html);
+    idoc.close();
+
+    const doPrint = () => {
+      try {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      } catch (e) {
+        console.warn('Falha ao imprimir automaticamente via iframe:', e);
+      } finally {
+        setTimeout(() => { try { iframe.remove(); } catch (_) {} }, 800);
+      }
+    };
+
+    // Some browsers require waiting for resources to load inside iframe
+    if (iframe.contentWindow.document.readyState === 'complete') {
+      setTimeout(doPrint, 200);
+    } else {
+      iframe.onload = () => setTimeout(doPrint, 200);
+      // fallback timeout
+      setTimeout(() => { try { doPrint(); } catch (_) {} }, 2500);
+    }
+  } catch (err) {
+    console.warn('Erro ao imprimir:', err);
+    showToast('Não foi possível enviar para a impressora. Verifique se o pop-up não está bloqueado.', 'error');
+  }
+}
+
+window._resolvePrinterName = _resolvePrinterName;
+
+window._printOpen = _printOpen;
+
+function _buildKitchenHtml(order) {
+  const s = getPrintSettings();
+  const layout = getPrintLayoutSettings();
+  if ((s.layoutMode === 'blocks' || layout.kitchenBlocks?.length) && window.PrintStudio && layout.kitchenBlocks?.length) {
+    return window.PrintStudio.renderReceiptHtml(layout.kitchenBlocks, order, { width: layout.paperWidth });
+  }
+  if (s.layoutMode === 'visual') {
+    return _buildKitchenHtmlFromLayout(order, s);
+  }
+  if (s.kitchenTemplate) {
+    const t = _applyPrintTemplate(s.kitchenTemplate, order, 'kitchen');
+    if (t) return t;
+  }
+  const items     = Array.isArray(order.itens) ? order.itens : [];
+  const date      = new Date(order.created_at).toLocaleString('pt-BR',
+    { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  const isMesa    = String(order.canal_venda || '').toLowerCase() === 'mesa';
+  const mesaMatch = (order.observacoes || '').match(/\[Mesa ([^\]]+)\]/);
+  const mesaNum   = mesaMatch ? mesaMatch[1] : null;
+  const tipoMap   = { delivery:'DELIVERY', retirada:'RETIRADA NO BALCÃO', domo_home:'DOMO HOME' };
+  const tipoLabel = isMesa && mesaNum
+    ? `MESA ${mesaNum}`
+    : (tipoMap[order.forma_entrega] || String(order.forma_entrega || 'DELIVERY').toUpperCase());
+  const obs = (order.observacoes || '').replace(/\[Mesa [^\]]+\]/, '').trim();
+  const rows = items.map(i => `<tr><td class="qty">${i.qty}x</td><td class="nome">${escapeHtml(String(i.nome || ''))}</td></tr>`).join('');
+  return `<!DOCTYPE html><html lang="pt-BR"><head>
+<meta charset="UTF-8"><title>Comanda #${order.id}</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Arial Narrow',Arial,sans-serif;font-size:14px;width:78mm;padding:4mm 4mm 10mm;background:#fff;color:#000;line-height:1.45}
+  .c{text-align:center}.b{font-weight:700}
+  hr.d{border:none;border-top:1px dashed #000;margin:6px 0}
+  hr.s{border:none;border-top:2px solid #000;margin:8px 0}
+  table{width:100%;border-collapse:collapse}
+  .qty{width:32px;font-weight:700;vertical-align:top;padding-top:2px;font-size:14px}
+  .nome{vertical-align:top;padding:4px 0;line-height:1.4;font-weight:700;letter-spacing:.5px;font-size:14px}
+  .header-large{font-size:18px;letter-spacing:1.5px;font-weight:700}
+  .header-medium{font-size:16px;letter-spacing:1px;font-weight:700}
+  .footer-small{font-size:11px;letter-spacing:.5px}
+  @media print{#__pb{display:none!important}html,body{width:78mm}@page{size:78mm auto;margin:0}}
+</style></head><body>
+  <div class="c header-large">VIA COZINHA</div>
+  <hr class="s">
+  <div class="c header-medium">PEDIDO #${order.id}</div>
+  <div class="c" style="font-size:13px;">${date}</div>
+  <hr class="d">
+  <div class="c header-medium">${tipoLabel}</div>
+  ${order.agendamento_entrega ? `<div class="c b" style="font-size:12px;margin-top:4px;border:1px dashed #000;padding:4px 6px;">&#9200; AGENDADO: ${new Date(order.agendamento_entrega).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</div>` : ''}
+  <hr class="s">
+  <table>${rows}</table>
+  ${obs ? `<hr class="d"><div style="font-size:13px;margin-top:4px;"><span class="b">Obs:</span> ${escapeHtml(obs)}</div>` : ''}
+  <hr class="s">
+  <div class="c" style="font-size:10px;">${escapeHtml(cfg('restaurant_name') || 'Casa José Silva')}</div>
+</body></html>`;
+}
+
+function _buildBillHtml(order) {
+  const s = getPrintSettings();
+  const layout = getPrintLayoutSettings();
+  if ((s.layoutMode === 'blocks' || layout.billBlocks?.length) && window.PrintStudio && layout.billBlocks?.length) {
+    return window.PrintStudio.renderReceiptHtml(layout.billBlocks, order, { width: layout.paperWidth });
+  }
+  if (s.layoutMode === 'visual') {
+    return _buildBillHtmlFromLayout(order, s);
+  }
+  if (s.billTemplate) {
+    const t = _applyPrintTemplate(s.billTemplate, order, 'bill');
+    if (t) return t;
+  }
+  const items    = Array.isArray(order.itens) ? order.itens : [];
+  const date     = new Date(order.created_at).toLocaleString('pt-BR',
+    { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  const isMesa    = String(order.canal_venda || '').toLowerCase() === 'mesa';
+  const mesaMatch = (order.observacoes || '').match(/\[Mesa ([^\]]+)\]/);
+  const mesaNum   = mesaMatch ? mesaMatch[1] : null;
+  const tipoMap   = { delivery:'DELIVERY', retirada:'RETIRADA NO BALCÃO', domo_home:'DOMO HOME' };
+  const tipoLabel = isMesa && mesaNum ? `PEDIDO NA MESA: ${mesaNum}` : (tipoMap[order.forma_entrega] || String(order.forma_entrega || 'DELIVERY').toUpperCase());
+  const restaurantName = cfg('restaurant_name') || 'Casa José Silva';
+  const addressParts   = [cfg('address'), cfg('neighborhood'), cfg('city') + (cfg('state') ? ' - ' + cfg('state') : '')].filter(Boolean);
+  const cnpj           = cfg('cnpj') || '';
+  const payMap = {
+    erede: 'Crédito online',
+    erede_debito: 'Débito online',
+    pix: 'Pix online',
+    na_entrega_dinheiro: 'Dinheiro',
+    na_entrega_cartao: 'Cartão',
+    na_entrega_pix: 'Pix'
+  };
+  const payLabel = payMap[String(order.forma_pagamento || '').toLowerCase()] || (order.forma_pagamento || '');
+  const subtotal = Number(order.valor_subtotal || 0) || items.reduce((s, i) => s + (Number(i.preco||0) * Number(i.qty||0)), 0);
+  const fee      = Number(order.valor_entrega  || 0);
+  const discount = Number(order.valor_desconto || 0);
+  const total    = Number(order.total          || 0);
+  const totalQty = items.reduce((s, i) => s + Number(i.qty || 0), 0);
+  function fmt(v) { return Number(v).toLocaleString('pt-BR', { minimumFractionDigits:2, maximumFractionDigits:2 }); }
+  const obs = (order.observacoes || '').replace(/\[Mesa [^\]]+\]/, '').trim();
+  const rows = items.map(i => `
+    <div class="row"><span class="iq">${i.qty}x</span><span class="in">${escapeHtml(String(i.nome||''))}</span><span class="ip">${fmt(Number(i.preco||0)*Number(i.qty||0))}</span></div>`).join('');
+  return `<!DOCTYPE html><html lang="pt-BR"><head>
+<meta charset="UTF-8"><title>Nota #${order.id}</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Arial Narrow',Arial,sans-serif;font-size:13px;width:78mm;padding:4mm 4mm 10mm;background:#fff;color:#000;line-height:1.45}
+  .c{text-align:center}.b{font-weight:700}
+  hr.d{border:none;border-top:1px dashed #000;margin:6px 0}
+  hr.s{border:none;border-top:2px solid #000;margin:8px 0}
+  .tl{display:flex;justify-content:space-between;margin:4px 0;font-size:13px}
+  .tl.g{font-size:16px;font-weight:800;margin-top:6px}
+  .row{display:flex;margin:4px 0;font-size:13px}.iq{min-width:28px;font-weight:700}.in{flex:1;line-height:1.4;letter-spacing:.4px;font-weight:700}.ip{min-width:58px;text-align:right;font-weight:700}
+  .header-large{font-size:18px;letter-spacing:1.5px;font-weight:800}
+  .header-medium{font-size:16px;letter-spacing:1px;font-weight:800}
+  .footer-small{font-size:11px;letter-spacing:.5px}
+  @media print{#__pb{display:none!important}html,body{width:78mm}@page{size:78mm auto;margin:0}}
+</style></head><body>
+  <div class="c" style="letter-spacing:1px;font-size:11px;">* * * * * * * * * * * * * * * * * * * *</div>
+  <div class="c header-large">VIA ENTREGA</div>
+  <div class="c" style="letter-spacing:1px;font-size:11px;">* * * * * * * * * * * * * * * * * * * *</div>
+  <div class="c header-medium" style="margin:6px 0 2px;">${escapeHtml(restaurantName)}</div>
+  ${addressParts.length ? `<div class="c" style="font-size:10px;">${escapeHtml(addressParts.join(', '))}</div>` : ''}
+  ${cnpj ? `<div class="c" style="font-size:10px;">CNPJ: ${escapeHtml(cnpj)}</div>` : ''}
+  <hr class="s">
+  <div class="c header-medium">${tipoLabel}</div>
+  <hr class="d">
+  <div style="font-size:14px;margin-top:4px;"><span class="b">Pedido n. </span>${order.id}</div>
+  <div><span class="b">Data: </span>${date}</div>
+  ${order.nome_cliente     ? `<div><span class="b">Cliente: </span>${escapeHtml(order.nome_cliente)}</div>` : ''}
+  ${order.telefone_cliente ? `<div><span class="b">Telefone: </span>${escapeHtml(order.telefone_cliente)}</div>` : ''}
+  ${order.cpf_cliente      ? `<div><span class="b">CPF: </span>${escapeHtml(order.cpf_cliente)}</div>` : ''}
+  ${!isMesa && order.endereco_entrega ? `<div><span class="b">Endereço: </span>${escapeHtml(order.endereco_entrega)}</div>` : ''}
+  ${order.agendamento_entrega ? `<div><span class="b">Agendamento: </span>${new Date(order.agendamento_entrega).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}</div>` : ''}
+  <hr class="d"><div class="b">ITENS:</div><hr class="d">
+  ${rows}
+  <hr class="d">
+  <div class="tl"><span>Qtd itens:</span><span>${totalQty}</span></div>
+  <hr class="d">
+  <div class="tl"><span>Total itens:</span><span>${fmt(subtotal)}</span></div>
+  ${fee>0?`<div class="tl"><span>Entrega:</span><span>${fmt(fee)}</span></div>`:''}
+  ${discount>0?`<div class="tl"><span>Desconto:</span><span>${fmt(discount)}</span></div>`:''}
+  <div class="tl g"><span>TOTAL</span><span>${fmt(total)}</span></div>
+  <hr class="d">
+  <div class="b">Forma de pagamento: ${escapeHtml(payLabel)}</div>
+  ${obs ? `<hr class="d"><div><span class="b">Obs:</span> ${escapeHtml(obs)}</div>` : ''}
+  <hr class="s">
+  <div class="c footer-small" style="margin-top:6px;">*** CUPOM SEM VALOR FISCAL ***</div>
+</body></html>`;
+}
+
+// Pedido atualmente aberto no modal — evita lookup por ID
+let _currentViewOrder = null;
+
+// Lookup robusto: allOrders (admin) ? Supabase fallback
+async function _fetchOrderForPrint(orderId) {
+  const id = Number(orderId);
+  // Tenta allOrders primeiro (admin panel)
+  if (typeof allOrders !== 'undefined') {
+    const found = allOrders.find(o => Number(o.id) === id);
+    if (found) return found;
+  }
+  // Fallback: busca direto do banco via admin client (sb) ou supabaseClient
+  const client = (typeof sb !== 'undefined' ? sb : null) || (typeof supabaseClient !== 'undefined' ? supabaseClient : null);
+  if (client) {
+    try {
+      const { data } = await client.from('pedidos').select('*').eq('id', id).maybeSingle();
+      if (data) return data;
+    } catch(_) {}
+  }
+  return null;
+}
+
+window.printKitchenTicket = async function(orderId, mode = 'auto') {
+  // Se chamado sem argumento, usa o pedido do modal aberto
+  const order = (orderId == null ? _currentViewOrder : null) || await _fetchOrderForPrint(orderId);
+  if (!order) { showToast('Pedido não encontrado para impressão', 'error'); return; }
+  _printOpen(_buildKitchenHtml(order), mode, _resolvePrinterName('kitchen'));
+};
+
+window.printTableBill = async function(orderId, mode = 'auto') {
+  const order = (orderId == null ? _currentViewOrder : null) || await _fetchOrderForPrint(orderId);
+  if (!order) { showToast('Pedido não encontrado para impressão', 'error'); return; }
+  _printOpen(_buildBillHtml(order), mode, _resolvePrinterName('bill'));
+};
+
+// Chamado pelo realtime quando chega novo pedido e auto-print está ON
+function _autoPrintOrder(order) {
+  const s = getPrintSettings();
+  if (!s.autoPrint) return;
+  // Garante que o pedido está em allOrders para os helpers funcionarem
+  if (typeof allOrders !== 'undefined' && !allOrders.find(o => Number(o.id) === Number(order.id))) {
+    allOrders.unshift(order);
+  }
+  if (s.printKitchen !== false) {
+    _printOpen(_buildKitchenHtml(order), 'auto', _resolvePrinterName('kitchen'));
+  }
+  if (s.printBill !== false) {
+    _printOpen(_buildBillHtml(order), 'auto', _resolvePrinterName('bill'));
+  }
+}
+
+function _syncRealtimeAdminOrder(order) {
+  if (!order || typeof allOrders === 'undefined') return;
+  const id = Number(order.id);
+  const existing = allOrders.find(o => Number(o.id) === id);
+  if (existing) {
+    Object.assign(existing, order);
+  } else {
+    allOrders.unshift(order);
+  }
+  if (typeof renderOrderTabCounts === 'function') {
+    try { renderOrderTabCounts(); } catch (_) {}
+  }
+}
+
 
 async function loadOrders() {
   const container = $('ordersList');
@@ -2563,10 +4074,12 @@ function buildOrderTimeline(status, order) {
       ${steps.map((step, i) => {
         let cls = '';
         if (i < currentIdx) cls = 'order-step--done';
-        else if (i === currentIdx) cls = 'order-step--active';
+        else if (i === currentIdx) cls = (status === 'entregue') ? 'order-step--done' : 'order-step--active';
+        const isDone = cls === 'order-step--done';
+        const dotIcon = isDone ? 'fa-check' : step.icon;
         return `
           <div class="order-step ${cls}">
-            <div class="order-step__dot"><i class="fas ${step.icon}"></i></div>
+            <div class="order-step__dot"><i class="fas ${dotIcon}"></i></div>
             <span class="order-step__label">${step.label}</span>
           </div>`;
       }).join('')}
@@ -2703,7 +4216,7 @@ $('btnForgotPassword')?.addEventListener('click', async () => {
     });
     if (error) throw error;
     if (msgEl) {
-      msgEl.textContent = '📧 Link de redefinição enviado para ' + email + '. Verifique sua caixa de entrada.';
+      msgEl.textContent = '?? Link de redefinição enviado para ' + email + '. Verifique sua caixa de entrada.';
       msgEl.classList.remove('hidden');
     }
   } catch (err) {
@@ -2919,8 +4432,8 @@ function startClientOrderRealtime(userId) {
         pendente: 'Pedido recebido ⏳',
         confirmado: 'Pedido confirmado ✅',
         preparando: 'Preparando seu pedido 👨‍🍳',
-        saiu_entrega: 'Em rota de entrega 🛵',
-        aguardando_pagamento: 'Pronto! Aguardando pagamento 💳',
+        saiu_entrega: 'Em rota de entrega ??',
+        aguardando_pagamento: 'Pronto! Aguardando pagamento ??',
         entregue: 'Pedido entregue! 🎉',
         cancelado: 'Pedido cancelado ❌'
       };
@@ -3310,12 +4823,14 @@ function showToast(msg, type = '') {
 // ============================================================
 (async function init() {
   await loadRuntimeConfig();
+  await initializePrintTemplates();
   applyContactLinks();
   await loadDeliveryZones();
   updateStatus();
   await initAuth();
   updateDeliveryFeePreview();
   updateCartUI();
+  updateOnlinePaymentUI();
   checkPaymentReturn();
 })();
 
@@ -3466,10 +4981,14 @@ function markOrderAsActed(orderId) {
   if (actedOrderIds.includes(orderId)) return;
   actedOrderIds.push(orderId);
   saveActedOrderIds();
+  hideNewOrderVisuals(orderId);
+  refreshAdminNewOrderBadgeCount();
 }
 
 function isOrderNew(order) {
-  return order?.status === 'pendente' && !actedOrderIds.includes(Number(order.id));
+  return order && order.id != null && order.status &&
+    order.status !== 'entregue' && order.status !== 'cancelado' &&
+    !actedOrderIds.includes(Number(order.id));
 }
 
 function formatOrderAge(createdAt) {
@@ -3514,8 +5033,169 @@ function ensureOrderAgeTimer() {
 const $ = (id) => document.getElementById(id);
 const $$ = (sel) => document.querySelectorAll(sel);
 
+// ==================== IMAGE CROP EDITOR ====================
+{
+  let _cropResolve = null;
+  let _cropState = null;
+
+  function _cropApplyTransform() {
+    if (!_cropState) return;
+    const { img, zoom, vSize } = _cropState;
+    const scaledW = img.naturalWidth * zoom;
+    const scaledH = img.naturalHeight * zoom;
+    _cropState.offsetX = Math.min(0, Math.max(vSize - scaledW, _cropState.offsetX));
+    _cropState.offsetY = Math.min(0, Math.max(vSize - scaledH, _cropState.offsetY));
+    img.style.width = img.naturalWidth + 'px';
+    img.style.height = img.naturalHeight + 'px';
+    img.style.transform = `translate(${_cropState.offsetX}px, ${_cropState.offsetY}px) scale(${zoom})`;
+    img.style.transformOrigin = '0 0';
+  }
+
+  function _closeCropModal() {
+    $('imageCropModal').classList.add('hidden');
+    document.body.style.overflow = '';
+    _cropState = null;
+    if (_cropResolve) { _cropResolve(null); _cropResolve = null; }
+  }
+
+  window.openImageCropModal = function(file) {
+    return new Promise(resolve => {
+      _cropResolve = resolve;
+      const img = $('cropImg');
+      img.onload = () => {
+        const viewport = $('cropViewport');
+        const vSize = viewport.offsetWidth || 360;
+        const minZoom = Math.max(vSize / img.naturalWidth, vSize / img.naturalHeight);
+        const zoom = minZoom;
+        _cropState = {
+          img, zoom, vSize, minZoom,
+          offsetX: (vSize - img.naturalWidth * zoom) / 2,
+          offsetY: (vSize - img.naturalHeight * zoom) / 2,
+        };
+        const slider = $('cropZoom');
+        slider.min = minZoom;
+        slider.max = minZoom * 5;
+        slider.value = zoom;
+        _cropApplyTransform();
+      };
+      const reader = new FileReader();
+      reader.onload = e => { img.src = e.target.result; };
+      reader.readAsDataURL(file);
+      $('imageCropModal').classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+    });
+  };
+
+  // Zoom slider
+  $('cropZoom')?.addEventListener('input', () => {
+    if (!_cropState) return;
+    const newZoom = parseFloat($('cropZoom').value);
+    const { vSize } = _cropState;
+    const cx = vSize / 2, cy = vSize / 2;
+    const ratio = newZoom / _cropState.zoom;
+    _cropState.offsetX = cx - (cx - _cropState.offsetX) * ratio;
+    _cropState.offsetY = cy - (cy - _cropState.offsetY) * ratio;
+    _cropState.zoom = newZoom;
+    _cropApplyTransform();
+  });
+
+  // Mouse drag
+  let _dragStart = null;
+  $('cropViewport')?.addEventListener('mousedown', (e) => {
+    if (!_cropState) return;
+    _dragStart = { x: e.clientX, y: e.clientY, ox: _cropState.offsetX, oy: _cropState.offsetY };
+    $('cropViewport').classList.add('dragging');
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!_dragStart || !_cropState) return;
+    _cropState.offsetX = _dragStart.ox + (e.clientX - _dragStart.x);
+    _cropState.offsetY = _dragStart.oy + (e.clientY - _dragStart.y);
+    _cropApplyTransform();
+  });
+  document.addEventListener('mouseup', () => {
+    _dragStart = null;
+    $('cropViewport')?.classList.remove('dragging');
+  });
+
+  // Wheel zoom
+  $('cropViewport')?.addEventListener('wheel', (e) => {
+    if (!_cropState) return;
+    e.preventDefault();
+    const slider = $('cropZoom');
+    const delta = e.deltaY < 0 ? 1.1 : 0.9;
+    const newZoom = Math.min(parseFloat(slider.max), Math.max(_cropState.minZoom, _cropState.zoom * delta));
+    const viewport = $('cropViewport');
+    const rect = viewport.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    const ratio = newZoom / _cropState.zoom;
+    _cropState.offsetX = cx - (cx - _cropState.offsetX) * ratio;
+    _cropState.offsetY = cy - (cy - _cropState.offsetY) * ratio;
+    _cropState.zoom = newZoom;
+    slider.value = newZoom;
+    _cropApplyTransform();
+  }, { passive: false });
+
+  // Touch
+  let _touchState = null;
+  $('cropViewport')?.addEventListener('touchstart', (e) => {
+    if (!_cropState) return;
+    e.preventDefault();
+    if (e.touches.length === 1) {
+      _touchState = { type: 'drag', x: e.touches[0].clientX, y: e.touches[0].clientY, ox: _cropState.offsetX, oy: _cropState.offsetY };
+    } else if (e.touches.length === 2) {
+      const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      _touchState = { type: 'pinch', dist, zoom: _cropState.zoom };
+    }
+  }, { passive: false });
+
+  $('cropViewport')?.addEventListener('touchmove', (e) => {
+    if (!_cropState || !_touchState) return;
+    e.preventDefault();
+    if (_touchState.type === 'drag' && e.touches.length === 1) {
+      _cropState.offsetX = _touchState.ox + (e.touches[0].clientX - _touchState.x);
+      _cropState.offsetY = _touchState.oy + (e.touches[0].clientY - _touchState.y);
+      _cropApplyTransform();
+    } else if (_touchState.type === 'pinch' && e.touches.length === 2) {
+      const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      const slider = $('cropZoom');
+      const newZoom = Math.min(parseFloat(slider.max), Math.max(_cropState.minZoom, _touchState.zoom * (dist / _touchState.dist)));
+      const cx = _cropState.vSize / 2, cy = _cropState.vSize / 2;
+      const ratio = newZoom / _cropState.zoom;
+      _cropState.offsetX = cx - (cx - _cropState.offsetX) * ratio;
+      _cropState.offsetY = cy - (cy - _cropState.offsetY) * ratio;
+      _cropState.zoom = newZoom;
+      slider.value = newZoom;
+      _cropApplyTransform();
+    }
+  }, { passive: false });
+
+  $('cropViewport')?.addEventListener('touchend', () => { _touchState = null; });
+
+  // Confirm
+  $('btnConfirmCrop')?.addEventListener('click', async () => {
+    if (!_cropState) return;
+    const { img, zoom, offsetX, offsetY, vSize } = _cropState;
+    const outputSize = 800;
+    const canvas = document.createElement('canvas');
+    canvas.width = outputSize;
+    canvas.height = outputSize;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, -offsetX / zoom, -offsetY / zoom, vSize / zoom, vSize / zoom, 0, 0, outputSize, outputSize);
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.92));
+    $('imageCropModal').classList.add('hidden');
+    document.body.style.overflow = '';
+    _cropState = null;
+    if (_cropResolve) { _cropResolve(blob); _cropResolve = null; }
+  });
+
+  $('btnCancelCrop')?.addEventListener('click', _closeCropModal);
+  $('btnCancelCrop2')?.addEventListener('click', _closeCropModal);
+}
+
 // ============================================================
-//  AUTH 
+//  AUTH
 // ============================================================
 $('adminLoginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -3608,7 +5288,9 @@ function showAdmin() {
   if ($('hojeGreeting')) $('hojeGreeting').textContent = `${saudacao}, ${primeiroNome}!`;
   startResponsiveTableObserver();
   initDashboardControls();
+  loadPrintSettingsFromDb().then(() => updatePrintBarUI()).catch(() => {});
   loadAdminLibs().then(() => loadDashboard());
+  initAdminAudioContext();
   startAdminRealtime();
   updateHojeBar();
 }
@@ -3670,22 +5352,390 @@ function loadAdminLibs() {
 
 // Realtime — novos pedidos para o admin (#14)
 let _adminRealtimeChannel = null;
+let _adminRealtimePollInterval = null;
 let _adminOrderBadgeCount = 0;
+let _adminAudioContext = null;
+
+function getAdminNewOrderCount() {
+  if (!Array.isArray(allOrders)) return 0;
+  return allOrders.filter(isOrderNew).length;
+}
+
+function refreshAdminNewOrderBadgeCount() {
+  if (Array.isArray(allOrders)) {
+    _adminOrderBadgeCount = getAdminNewOrderCount();
+  }
+  const btn = document.querySelector('.nav-item[data-page="pedidos"]');
+  if (!btn) return;
+  if (_adminOrderBadgeCount > 0) {
+    btn.setAttribute('data-badge', _adminOrderBadgeCount);
+  } else {
+    btn.removeAttribute('data-badge');
+  }
+}
+
+function hideNewOrderVisuals(orderId) {
+  const row = document.querySelector(`tr[data-order-id="${orderId}"]`);
+  if (row) {
+    row.classList.remove('order-row--new');
+    row.querySelectorAll('[data-new-badge="1"]').forEach(el => el.remove());
+  }
+  const statusBox = document.querySelector(`.order-status[data-order-id="${orderId}"]`);
+  if (statusBox) {
+    statusBox.classList.remove('order-status--new');
+    statusBox.querySelector('[data-new-badge="1"]')?.remove();
+  }
+}
+
+function initAdminAudioContext() {
+  if (_adminAudioContext) return;
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) return;
+  _adminAudioContext = new AudioContext();
+
+  const unlockAudio = () => {
+    if (!_adminAudioContext) return;
+    if (_adminAudioContext.state === 'suspended') {
+      _adminAudioContext.resume().catch(() => {});
+    }
+    document.removeEventListener('click', unlockAudio);
+    document.removeEventListener('keydown', unlockAudio);
+  };
+
+  document.addEventListener('click', unlockAudio, { once: true, passive: true });
+  document.addEventListener('keydown', unlockAudio, { once: true, passive: true });
+}
+
+function stopAdminRealtimePollFallback() {
+  if (_adminRealtimePollInterval) {
+    clearInterval(_adminRealtimePollInterval);
+    _adminRealtimePollInterval = null;
+  }
+}
+
+async function pollAdminOrdersFallback() {
+  try {
+    const { data, error } = await sb.from('pedidos').select('*').order('created_at', { ascending: false }).limit(5);
+    if (error) throw error;
+    if (!Array.isArray(data) || !data.length) return;
+
+    const knownIds = new Set((allOrders || []).map(o => Number(o.id)));
+    const newOrders = data.filter(order => !knownIds.has(Number(order.id)));
+    if (!newOrders.length) return;
+
+    const shouldAlert = Array.isArray(allOrders) && allOrders.length > 0;
+    newOrders.reverse().forEach(order => {
+      _syncRealtimeAdminOrder(order);
+      if (shouldAlert) {
+        try { playNewOrderSound(); } catch (e) { console.warn('[Realtime admin][poll fallback] playNewOrderSound erro', e); }
+      }
+    });
+
+    refreshAdminNewOrderBadgeCount();
+    try { if (typeof renderOrderTabCounts === 'function') renderOrderTabCounts(); } catch (_) {}
+    if (document.getElementById('pagePedidos')?.classList.contains('active')) {
+      loadOrders().catch(err => console.warn('[Realtime admin][poll fallback] Falha ao recarregar pedidos:', err));
+    } else if (document.getElementById('ordersTableBody')) {
+      try { renderOrdersForCurrentTab(); } catch (e) { console.warn('[Realtime admin][poll fallback] Falha ao atualizar tabela de pedidos:', e); }
+    }
+    if (document.getElementById('pageDashboard')?.classList.contains('active')) {
+      loadDashboard().catch(err => console.warn('[Realtime admin][poll fallback] loadDashboard falhou:', err));
+    } else {
+      updateHojeBar().catch(() => {});
+    }
+  } catch (err) {
+    console.warn('[Realtime admin][poll fallback] erro:', err);
+  }
+}
+
+function startAdminRealtimePollFallback() {
+  if (_adminRealtimePollInterval) return;
+  _adminRealtimePollInterval = setInterval(pollAdminOrdersFallback, 5000);
+  pollAdminOrdersFallback().catch(() => {});
+}
+
+function playFallbackBeep() {
+  try {
+    const sampleRate = 44100;
+    const duration = 0.18;
+    const freq = 880;
+    const volume = Math.min(1, Math.max(0.1, getAdminSoundSettings().soundVolume || 0.7));
+    const length = Math.floor(sampleRate * duration);
+    const buffer = new ArrayBuffer(44 + length * 2);
+    const view = new DataView(buffer);
+    const writeString = (offset, str) => {
+      for (let i = 0; i < str.length; i += 1) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + length * 2, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, length * 2, true);
+
+    for (let i = 0; i < length; i += 1) {
+      const t = i / sampleRate;
+      const sample = Math.round(volume * 32767 * Math.sin(2 * Math.PI * freq * t));
+      view.setInt16(44 + i * 2, sample, true);
+    }
+
+    const blob = new Blob([buffer], { type: 'audio/wav' });
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.volume = 1;
+    audio.play().catch(() => {});
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
+  } catch (err) {
+    console.warn('[FallbackSound] não foi possível reproduzir som:', err);
+    return false;
+  }
+}
+
+function getAdminSoundSettings() {
+  const type = String(configData['admin_new_order_sound_type']?.value || configDefaults.admin_new_order_sound_type || 'ping').toLowerCase();
+  const validTypes = ['ping', 'double', 'triple', 'chime', 'bell', 'alert', 'swoop', 'spark', 'ding', 'tone'];
+  const soundType = validTypes.includes(type) ? type : 'ping';
+  const rawVolume = configData['admin_new_order_sound_volume']?.value ?? configDefaults.admin_new_order_sound_volume;
+  let soundVolume = parseFloat(rawVolume);
+  if (Number.isNaN(soundVolume)) soundVolume = 1.0;
+  soundVolume = Math.min(1, Math.max(0.1, soundVolume));
+  return { soundType, soundVolume };
+}
+
+function playNewOrderSound() {
+  initAdminAudioContext();
+
+  if (_adminAudioContext) {
+    try {
+      if (_adminAudioContext.state === 'suspended') {
+        _adminAudioContext.resume().catch(() => {});
+      }
+
+      if (_adminAudioContext.state !== 'closed') {
+        const { soundType, soundVolume } = getAdminSoundSettings();
+        const ctx = _adminAudioContext;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = 'sine';
+        gain.gain.setValueAtTime(0.001, ctx.currentTime);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        const startAt = ctx.currentTime + 0.02;
+        const maxVolume = soundVolume;
+
+        const makeShortBeep = (frequency, offset, duration) => {
+          osc.frequency.setValueAtTime(frequency, startAt + offset);
+          gain.gain.setValueAtTime(maxVolume, startAt + offset + 0.005);
+          gain.gain.linearRampToValueAtTime(0.001, startAt + offset + duration);
+        };
+
+        if (soundType === 'ping') {
+          osc.type = 'triangle';
+          makeShortBeep(1100, 0, 0.08);
+          makeShortBeep(1250, 0.12, 0.08);
+          makeShortBeep(1380, 0.24, 0.10);
+          osc.start(startAt);
+          osc.stop(startAt + 0.38);
+        } else if (soundType === 'double') {
+          osc.type = 'sine';
+          makeShortBeep(820, 0, 0.12);
+          makeShortBeep(980, 0.20, 0.12);
+          osc.start(startAt);
+          osc.stop(startAt + 0.36);
+        } else if (soundType === 'triple') {
+          osc.type = 'square';
+          makeShortBeep(700, 0, 0.10);
+          makeShortBeep(840, 0.18, 0.10);
+          makeShortBeep(980, 0.36, 0.12);
+          osc.start(startAt);
+          osc.stop(startAt + 0.52);
+        } else if (soundType === 'chime') {
+          osc.type = 'sine';
+          makeShortBeep(620, 0, 0.12);
+          makeShortBeep(760, 0.18, 0.12);
+          makeShortBeep(900, 0.36, 0.14);
+          osc.start(startAt);
+          osc.stop(startAt + 0.56);
+        } else if (soundType === 'bell') {
+          osc.type = 'triangle';
+          makeShortBeep(880, 0, 0.14);
+          makeShortBeep(760, 0.22, 0.14);
+          osc.start(startAt);
+          osc.stop(startAt + 0.42);
+        } else if (soundType === 'alert') {
+          osc.type = 'square';
+          makeShortBeep(700, 0, 0.08);
+          makeShortBeep(820, 0.14, 0.08);
+          makeShortBeep(940, 0.28, 0.10);
+          osc.start(startAt);
+          osc.stop(startAt + 0.42);
+        } else if (soundType === 'swoop') {
+          osc.type = 'sine';
+          makeShortBeep(1350, 0, 0.10);
+          makeShortBeep(1140, 0.18, 0.10);
+          makeShortBeep(980, 0.34, 0.12);
+          osc.start(startAt);
+          osc.stop(startAt + 0.48);
+        } else if (soundType === 'spark') {
+          osc.type = 'sawtooth';
+          makeShortBeep(1000, 0, 0.08);
+          makeShortBeep(1180, 0.14, 0.08);
+          makeShortBeep(1360, 0.28, 0.08);
+          osc.start(startAt);
+          osc.stop(startAt + 0.38);
+        } else if (soundType === 'ding') {
+          osc.type = 'triangle';
+          makeShortBeep(980, 0, 0.10);
+          makeShortBeep(820, 0.16, 0.10);
+          osc.start(startAt);
+          osc.stop(startAt + 0.34);
+        } else if (soundType === 'tone') {
+          osc.type = 'sine';
+          makeShortBeep(760, 0, 0.10);
+          makeShortBeep(880, 0.18, 0.10);
+          makeShortBeep(1020, 0.34, 0.12);
+          osc.start(startAt);
+          osc.stop(startAt + 0.48);
+        } else {
+          osc.type = 'triangle';
+          makeShortBeep(880, 0, 0.12);
+          makeShortBeep(1040, 0.18, 0.12);
+          osc.start(startAt);
+          osc.stop(startAt + 0.34);
+        }
+
+        setTimeout(() => {
+          try { osc.disconnect(); gain.disconnect(); } catch (_) {}
+        }, 900);
+        return;
+      }
+    } catch (err) {
+      console.warn('playNewOrderSound WebAudio falhou:', err);
+    }
+  }
+
+  playFallbackBeep();
+}
+
+// Helper de teste: simula novo pedido para reproduzir som, badge e impressão (local somente)
+window.testNewOrderBehavior = function(opts = {}) {
+  const fakeId = opts.id || Math.floor(Date.now() / 1000);
+  const fakeOrder = {
+    id: fakeId,
+    status: 'pendente',
+    created_at: new Date().toISOString(),
+    itens: [{ nome: 'Teste - Pizza', qty: 1, preco: 0 }],
+    total: 0,
+    forma_pagamento: 'erede'
+  };
+
+  console.log('[TEST] Simulando novo pedido:', fakeOrder);
+  // incrementa badge
+  _adminOrderBadgeCount++;
+  const btn = document.querySelector('.nav-item[data-page="pedidos"]');
+  if (btn) btn.setAttribute('data-badge', _adminOrderBadgeCount);
+
+  // tenta reproduzir o som
+  try { playNewOrderSound(); } catch (e) { console.warn('[TEST] playNewOrderSound falhou', e); }
+
+  // sincroniza com a lista de pedidos do admin e renderiza a tabela correta
+  _syncRealtimeAdminOrder(fakeOrder);
+  try { renderOrdersForCurrentTab(); } catch (_) {}
+
+  // dispara impressão automática apenas se estiver ativada
+  try {
+    const s = getPrintSettings();
+    if (s.autoPrint) {
+      _autoPrintOrder(fakeOrder);
+    } else {
+      console.log('[TEST] autoPrint desligado — impressão automática não será disparada');
+    }
+  } catch (e) { console.warn('[TEST] Falha ao checar autoPrint', e); }
+};
+
 function startAdminRealtime() {
   if (_adminRealtimeChannel) return;
-  _adminRealtimeChannel = supabaseClient
+  console.log('[Realtime admin] iniciando canal de pedidos');
+  _adminRealtimeChannel = sb
     .channel('admin_orders_rt')
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pedidos' }, (payload) => {
-      _adminOrderBadgeCount++;
-      const btn = document.querySelector('.nav-item[data-page="pedidos"]');
-      if (btn) btn.setAttribute('data-badge', _adminOrderBadgeCount);
-      // Recarrega se na página de pedidos
-      if (document.getElementById('pagePedidos')?.classList.contains('active')) {
-        const orig = _adminOrderBadgeCount;
-        loadOrders().then(() => { if (orig === _adminOrderBadgeCount) _adminOrderBadgeCount = 0; });
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'pedidos' }, (payload) => {
+      const eventType = payload?.event || payload?.eventType || payload?.type;
+      const record = payload?.new || payload?.record || payload?.data || payload?.old;
+      console.log('[Realtime admin] payload recebido:', eventType, record);
+      const ordersPageActive = document.getElementById('pagePedidos')?.classList.contains('active');
+
+      if (eventType === 'INSERT' && record) {
+        console.log('[Realtime admin] novo pedido id=', record.id);
+        try { playNewOrderSound(); } catch (e) { console.warn('playNewOrderSound erro', e); }
+        _syncRealtimeAdminOrder(record);
+        refreshAdminNewOrderBadgeCount();
+        try { if (typeof renderOrderTabCounts === 'function') renderOrderTabCounts(); } catch(_) {}
+        if (ordersPageActive) {
+          loadOrders().catch(err => console.warn('[Realtime admin] Falha ao recarregar pedidos:', err));
+        } else if (document.getElementById('ordersTableBody')) {
+          try { renderOrdersForCurrentTab(); } catch (e) { console.warn('[Realtime admin] Falha ao atualizar tabela de pedidos:', e); }
+        }
+        try {
+          if (getPrintSettings().autoPrint) {
+            console.log('[Realtime admin] autoPrint ativo — disparando impressão automática');
+            _autoPrintOrder(record);
+          }
+        } catch (e) { console.warn('Erro ao verificar autoPrint:', e); }
+        if (document.getElementById('pageDashboard')?.classList.contains('active')) {
+          loadDashboard().catch(err => console.warn('[Realtime admin] loadDashboard falhou:', err));
+        } else {
+          updateHojeBar().catch(() => {});
+        }
+      }
+
+      if (eventType === 'UPDATE' && record) {
+        _syncRealtimeAdminOrder(record);
+        refreshAdminNewOrderBadgeCount();
+        try { if (typeof renderOrderTabCounts === 'function') renderOrderTabCounts(); } catch(_) {}
+        if (ordersPageActive) {
+          loadOrders().catch(err => console.warn('[Realtime admin] Falha ao recarregar pedidos:', err));
+        } else if (document.getElementById('ordersTableBody')) {
+          try { renderOrdersForCurrentTab(); } catch (e) { console.warn('[Realtime admin] Falha ao atualizar tabela de pedidos:', e); }
+        }
+        if (document.getElementById('pageDashboard')?.classList.contains('active')) {
+          loadDashboard().catch(err => console.warn('[Realtime admin] loadDashboard falhou:', err));
+        } else {
+          updateHojeBar().catch(() => {});
+        }
+      }
+
+      if (eventType === 'DELETE' && payload?.old) {
+        if (Array.isArray(allOrders)) {
+          allOrders = allOrders.filter(o => Number(o.id) !== Number(payload.old.id));
+        }
+        try { if (typeof renderOrderTabCounts === 'function') renderOrderTabCounts(); } catch(_) {}
+        if (ordersPageActive) {
+          loadOrders().catch(err => console.warn('[Realtime admin] Falha ao recarregar pedidos:', err));
+        } else if (document.getElementById('ordersTableBody')) {
+          try { renderOrdersForCurrentTab(); } catch (e) { console.warn('[Realtime admin] Falha ao atualizar tabela de pedidos:', e); }
+        }
+        refreshAdminNewOrderBadgeCount();
+        if (document.getElementById('pageDashboard')?.classList.contains('active')) {
+          loadDashboard().catch(err => console.warn('[Realtime admin] loadDashboard falhou:', err));
+        } else {
+          updateHojeBar().catch(() => {});
+        }
       }
     })
     .subscribe();
+
+  startAdminRealtimePollFallback();
 }
 
 // Export CSV — pedidos do período selecionado no dashboard
@@ -3799,8 +5849,8 @@ function startResponsiveTableObserver() {
 // ============================================================
 //  NAVIGATION
 // ============================================================
-const pages = { dashboard: 'pageDashboard', pedidos: 'pagePedidos', cardapio: 'pageCardapio', clientes: 'pageClientes', entrega: 'pageEntrega', promocoes: 'pagePromocoes', config: 'pageConfig' };
-const pageTitles = { dashboard: 'Dashboard', pedidos: 'Pedidos', cardapio: 'Cardápio', clientes: 'Clientes', entrega: 'Entrega', promocoes: 'Promoções', config: 'Configurações' };
+const pages = { dashboard: 'pageDashboard', pedidos: 'pagePedidos', cardapio: 'pageCardapio', clientes: 'pageClientes', entrega: 'pageEntrega', promocoes: 'pagePromocoes', config: 'pageConfig', 'print-layout': 'pagePrintLayout' };
+const pageTitles = { dashboard: 'Dashboard', pedidos: 'Pedidos', cardapio: 'Cardápio', clientes: 'Clientes', entrega: 'Entrega', promocoes: 'Promoções', config: 'Configurações', 'print-layout': 'Layout de Impressão' };
 const pageLeads = {
   dashboard: 'Resumo operacional com os indicadores mais importantes do dia.',
   pedidos: 'Fluxo de pedidos com filtros rápidos, ações imediatas e detalhe sob demanda.',
@@ -3808,7 +5858,8 @@ const pageLeads = {
   clientes: 'Leitura da base de clientes por recorrência, contato e valor acumulado.',
   entrega: 'Mapa e zonas de entrega organizados em uma área operacional dedicada.',
   promocoes: 'Lista de campanhas enxuta com editor aberto só quando você realmente precisa.',
-  config: 'Configurações agrupadas por contexto para evitar excesso de campos simultâneos.'
+  config: 'Configurações agrupadas por contexto para evitar excesso de campos simultâneos.',
+  'print-layout': 'Configuração de impressora e templates para impressões de cozinha e nota.'
 };
 
 function openModal(modalId) {
@@ -3828,15 +5879,16 @@ function syncAdminHubState(activePage) {
 
 function loadAdminPageData(pageKey) {
   if (pageKey === 'dashboard') loadDashboard();
-  else if (pageKey === 'pedidos') loadOrders();
+  else if (pageKey === 'pedidos') { loadOrders(); updatePrintBarUI(); }
   else if (pageKey === 'cardapio') loadProducts();
   else if (pageKey === 'clientes') loadClients();
   else if (pageKey === 'entrega') loadDeliveryZones();
   else if (pageKey === 'promocoes') loadPromotions();
   else if (pageKey === 'config') loadConfig();
+  else if (pageKey === 'print-layout') loadPrinterConfigPage();
 }
 
-function setActiveAdminPage(pageKey) {
+window.setActiveAdminPage = function(pageKey) {
   if (!pages[pageKey] || !$(pages[pageKey])) return;
 
   $$('.page').forEach(pg => pg.classList.remove('active'));
@@ -3863,6 +5915,10 @@ $$('[data-admin-page-target]').forEach(btn => {
     const pageKey = btn.dataset.adminPageTarget;
     if (!pageKey) return;
     closeModal('adminCommandModal');
+    if (pageKey === 'print-layout') {
+      openPrintLayoutEditor();
+      return;
+    }
     setActiveAdminPage(pageKey);
   });
 });
@@ -4211,8 +6267,17 @@ function renderRevenueChart(orders, rangeStart, rangeEnd) {
     },
     options: {
       responsive: true, maintainAspectRatio: true,
+      aspectRatio: window.innerWidth < 768 ? 2 : 1.8,
       plugins: { legend: { display: false } },
-      scales: { y: { beginAtZero: true } }
+      scales: {
+        y: {
+          beginAtZero: true,
+          ticks: { font: { size: window.innerWidth < 768 ? 9 : 11 } }
+        },
+        x: {
+          ticks: { font: { size: window.innerWidth < 768 ? 9 : 11 }, maxRotation: 45 }
+        }
+      }
     }
   });
 }
@@ -4232,7 +6297,16 @@ function renderStatusChart(orders) {
       labels: Object.keys(statusCounts).map(k => statusLabels[k] || k),
       datasets: [{ data: Object.values(statusCounts), backgroundColor: Object.keys(statusCounts).map(k => colors[k] || '#999'), borderWidth: 0 }]
     },
-    options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 10, font: { size: 11 } } } } }
+    options: {
+      responsive: true, maintainAspectRatio: true,
+      aspectRatio: window.innerWidth < 768 ? 1.6 : 1,
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { boxWidth: 10, padding: window.innerWidth < 768 ? 6 : 10, font: { size: window.innerWidth < 768 ? 9 : 11 } }
+        }
+      }
+    }
   });
 }
 
@@ -4630,8 +6704,7 @@ function renderBusinessInsights(currentOrders, previousOrders, currentMetrics, p
 //  ORDERS PAGE
 // ============================================================
 $('btnRefreshOrders').addEventListener('click', loadOrders);
-$('filterStatus').addEventListener('change', loadOrders);
-$('filterDate').addEventListener('change', loadOrders);
+$('filterDate').addEventListener('change', () => renderOrdersForCurrentTab());
 
 $('btnNewTableOrder')?.addEventListener('click', openTableOrderModal);
 $('btnAddTableItem')?.addEventListener('click', addItemToTableOrderDraft);
@@ -4652,7 +6725,7 @@ function getQuickStatusActions(status, order) {
   const isMesa = String(order?.canal_venda || '').toLowerCase() === 'mesa';
   const isPayOnDelivery = String(order?.forma_pagamento || '').toLowerCase().startsWith('na_entrega');
 
-  // Mesa: confirmado → preparando → entregue (servido) → cobrar pagamento
+  // Mesa: confirmado ? preparando ? entregue (servido) ? cobrar pagamento
   if (isMesa) {
     const map = {
       pendente: ['confirmado', 'cancelado'],
@@ -4666,7 +6739,7 @@ function getQuickStatusActions(status, order) {
     return map[status] || [];
   }
 
-  // Entrega pagar na entrega: confirmado → preparando → em rota → cobrar pagamento → entregue
+  // Entrega pagar na entrega: confirmado ? preparando ? em rota ? cobrar pagamento ? entregue
   if (isPayOnDelivery) {
     const map = {
       pendente: ['confirmado', 'cancelado'],
@@ -4680,7 +6753,7 @@ function getQuickStatusActions(status, order) {
     return map[status] || [];
   }
 
-  // Pagamento online: confirmado → preparando → em rota → entregue
+  // Pagamento online: confirmado ? preparando ? em rota ? entregue
   const map = {
     pendente: ['confirmado', 'cancelado'],
     confirmado: ['preparando', 'cancelado'],
@@ -4770,6 +6843,9 @@ async function updateOrderStatus(orderId, newStatus, sourceEl) {
     const { error } = await sb.from('pedidos').update({ status: newStatus }).eq('id', orderId);
     if (error) throw error;
 
+    // Pedido confirmado pelo admin ? enviar para Saipos (se ainda não foi enviado)
+    if (newStatus === 'confirmado') autoEnviarParaSaipos(orderId);
+
     markOrderAsActed(orderId);
     if (row) {
       row.classList.remove('order-row--new');
@@ -4782,6 +6858,18 @@ async function updateOrderStatus(orderId, newStatus, sourceEl) {
       }
     }
     updateOrderAges();
+
+    renderOrderTabCounts();
+    // Remove row if order no longer belongs in the current tab
+    if (_ordersActiveTab !== 'todos' && row) {
+      const updatedOrder = allOrders.find(o => o.id === orderId);
+      if (updatedOrder && getOrderTabGroup(updatedOrder) !== _ordersActiveTab) {
+        row.remove();
+        if (!$('ordersTableBody').querySelector('tr')) {
+          $('ordersEmpty').classList.remove('hidden');
+        }
+      }
+    }
 
     renderStatusChart(allOrders);
     renderRecentOrders(allOrders.slice(0, 10));
@@ -4805,51 +6893,214 @@ async function updateOrderStatus(orderId, newStatus, sourceEl) {
   }
 }
 
+const ORDER_TABS = {
+  ativos:    ['pendente', 'confirmado', 'preparando', 'saiu_entrega', 'aguardando_pagamento'],
+  entregues: ['entregue'],
+  cancelados: ['cancelado'],
+  todos:     null,
+};
+
+// Smart tab classification: mesa uses a different flow than delivery
+// Mesa:     pendente?confirmado?preparando?entregue(servido)?aguardando_pagamento(done)
+// Delivery pag.entrega: ...?saiu_entrega?aguardando_pagamento?entregue(done)
+// Delivery online:      ...?saiu_entrega?entregue(done)
+function getOrderTabGroup(order) {
+  if (order.status === 'cancelado') return 'cancelados';
+  const isMesa = String(order?.canal_venda || '').toLowerCase() === 'mesa';
+  if (isMesa) {
+    // For mesa, the final state is aguardando_pagamento (payment collected at table)
+    if (order.status === 'aguardando_pagamento') return 'entregues';
+  } else {
+    // For all delivery types, entregue is the final done state
+    if (order.status === 'entregue') return 'entregues';
+  }
+  return 'ativos';
+}
+
+let _ordersActiveTab = 'ativos';
+let _selectedOrderIds = new Set();
+
+window.setOrdersTab = function setOrdersTab(tab) {
+  _ordersActiveTab = tab;
+  _selectedOrderIds.clear();
+  document.querySelectorAll('.orders-tab').forEach(btn => {
+    btn.classList.toggle('orders-tab--active', btn.dataset.tab === tab);
+  });
+  renderOrdersForCurrentTab();
+};
+
+function renderOrderTabCounts() {
+  const counts = { ativos: 0, entregues: 0, cancelados: 0, todos: allOrders.length };
+  allOrders.forEach(o => {
+    const g = getOrderTabGroup(o);
+    if (counts[g] !== undefined) counts[g]++;
+  });
+  Object.entries(counts).forEach(([tab, n]) => {
+    const el = document.getElementById('tabCount' + tab.charAt(0).toUpperCase() + tab.slice(1));
+    if (el) el.textContent = n || '';
+  });
+}
+
+function renderOrdersForCurrentTab() {
+  const tbody = $('ordersTableBody');
+  const date = $('filterDate')?.value;
+
+  let rows = allOrders.filter(o => {
+    if (_ordersActiveTab !== 'todos' && getOrderTabGroup(o) !== _ordersActiveTab) return false;
+    if (date) {
+      const d = (o.created_at || '').slice(0, 10);
+      if (d !== date) return false;
+    }
+    return true;
+  });
+
+  if (!rows.length) {
+    tbody.innerHTML = '';
+    $('ordersEmpty').classList.remove('hidden');
+    updateBulkBar();
+    return;
+  }
+  $('ordersEmpty').classList.add('hidden');
+
+  tbody.innerHTML = rows.map(o => {
+    const items = Array.isArray(o.itens) ? o.itens.map(i => `${i.qty}x ${i.nome}`).join(', ') : '';
+    const rowNewClass = isOrderNew(o) ? ' order-row--new' : '';
+    const checked = _selectedOrderIds.has(o.id) ? ' checked' : '';
+    return `
+      <tr data-order-id="${o.id}" class="${rowNewClass}${_selectedOrderIds.has(o.id) ? ' order-row--selected' : ''}">
+        <td class="order-sel-cell"><label class="order-sel"><input type="checkbox" class="order-sel__chk" data-order-id="${o.id}" onchange="toggleOrderSelect(${o.id},this.checked)"${checked}> <strong>#${o.id}</strong></label></td>
+        <td>${escapeHtml(o.nome_cliente || 'N/A')}</td>
+        <td title="${escapeHtml(items)}">${escapeHtml(items.slice(0, 40))}${items.length > 40 ? '...' : ''}</td>
+        <td><strong>${formatMoney(o.total)}</strong></td>
+        <td>${escapeHtml(o.forma_entrega || 'delivery')}</td>
+        <td>${orderStatusCellMarkup(o)}</td>
+        <td>${o.enviado_saipos
+          ? '<span title="Enviado para Saipos" style="color:#4CAF50;"><i class="fas fa-check-circle"></i></span>'
+          : '<span style="color:#bbb;" title="Não enviado">—</span>'
+        }</td>
+        <td>${formatDate(o.created_at)}</td>
+        <td><span class="order-age" data-order-created-at="${escapeHtml(o.created_at || '')}" data-order-status="${escapeHtml(o.status || '')}"></span></td>
+        <td>
+          <div class="order-actions-cell">
+            <button class="btn btn--outline-sm btn--sm" onclick="viewOrder(${o.id})" title="Ver detalhes"><i class="fas fa-eye"></i></button>
+            <button class="btn btn--outline-sm btn--sm order-print-btn order-print-btn--kitchen" onclick="printKitchenTicket(${o.id})" title="Imprimir cozinha"><i class="fas fa-fire"></i></button>
+            <button class="btn btn--outline-sm btn--sm order-print-btn order-print-btn--bill" onclick="printTableBill(${o.id})" title="Nota mesa"><i class="fas fa-receipt"></i></button>
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+
+  bindOrderStatusEvents(tbody);
+  updateOrderAges();
+  ensureOrderAgeTimer();
+  updateBulkBar();
+}
+
+function updateBulkBar() {
+  const count = _selectedOrderIds.size;
+  const controls = $('bulkControls');
+  const countEl = $('bulkSelectedCount');
+  const btnLabel = $('btnSelectAllLabel');
+  const btnSelectAll = $('btnSelectAll');
+
+  if (controls) controls.style.display = count > 0 ? 'inline-flex' : 'none';
+  if (countEl) countEl.textContent = count;
+  if (!count) { const sel = $('bulkStatusSelect'); if (sel) sel.value = ''; }
+
+  // Update select-all button label and disabled state
+  const visible = document.querySelectorAll('#ordersTableBody .order-sel__chk');
+  if (btnSelectAll) btnSelectAll.disabled = !visible.length;
+  if (btnLabel) {
+    const allSelected = visible.length > 0 && [...visible].every(c => _selectedOrderIds.has(Number(c.dataset.orderId)));
+    btnLabel.textContent = allSelected ? 'Desmarcar todos' : 'Selecionar todos';
+  }
+
+  // sync hidden thead checkbox
+  const allChk = $('selectAllOrders');
+  if (allChk) {
+    if (!visible.length) { allChk.checked = false; allChk.indeterminate = false; return; }
+    const selectedVisible = [...visible].filter(c => _selectedOrderIds.has(Number(c.dataset.orderId))).length;
+    if (selectedVisible === 0) { allChk.checked = false; allChk.indeterminate = false; }
+    else if (selectedVisible === visible.length) { allChk.checked = true; allChk.indeterminate = false; }
+    else { allChk.checked = false; allChk.indeterminate = true; }
+  }
+}
+
+window.toggleOrderSelect = function(id, checked) {
+  if (checked) _selectedOrderIds.add(id);
+  else _selectedOrderIds.delete(id);
+  const row = document.querySelector(`#ordersTableBody tr[data-order-id="${id}"]`);
+  if (row) row.classList.toggle('order-row--selected', checked);
+  updateBulkBar();
+};
+
+window.toggleSelectAllOrders = function(checked) {
+  document.querySelectorAll('#ordersTableBody .order-sel__chk').forEach(chk => {
+    const id = Number(chk.dataset.orderId);
+    chk.checked = checked;
+    if (checked) _selectedOrderIds.add(id);
+    else _selectedOrderIds.delete(id);
+    const row = chk.closest('tr');
+    if (row) row.classList.toggle('order-row--selected', checked);
+  });
+  updateBulkBar();
+};
+
+window.clearOrderSelection = function() {
+  _selectedOrderIds.clear();
+  document.querySelectorAll('#ordersTableBody .order-sel__chk').forEach(chk => { chk.checked = false; });
+  document.querySelectorAll('#ordersTableBody tr').forEach(r => r.classList.remove('order-row--selected'));
+  updateBulkBar();
+};
+
+window.clickSelectAllBtn = function() {
+  const visible = document.querySelectorAll('#ordersTableBody .order-sel__chk');
+  const allSelected = visible.length > 0 && [...visible].every(c => _selectedOrderIds.has(Number(c.dataset.orderId)));
+  toggleSelectAllOrders(!allSelected);
+};
+
+window.applyBulkStatus = async function() {
+  const newStatus = $('bulkStatusSelect')?.value;
+  if (!newStatus) { showToast('Selecione um status para aplicar', 'error'); return; }
+  if (!_selectedOrderIds.size) return;
+
+  const btn = document.querySelector('#ordersBulkBar .btn--primary');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Aplicando...'; }
+
+  const ids = [..._selectedOrderIds];
+  const results = await Promise.allSettled(ids.map(async id => {
+    const order = allOrders.find(o => o.id === id);
+    if (!order || order.status === newStatus) return;
+    const { error } = await sb.from('pedidos').update({ status: newStatus }).eq('id', id);
+    if (error) throw error;
+    order.status = newStatus;
+  }));
+
+  if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check-double"></i> Aplicar'; }
+
+  const failed = results.filter(r => r.status === 'rejected').length;
+  if (failed) showToast(`${ids.length - failed} atualizados, ${failed} com erro`, 'warning');
+  else showToast(`${ids.length} pedido(s) atualizados!`, 'success');
+
+  clearOrderSelection();
+  renderOrderTabCounts();
+  renderOrdersForCurrentTab();
+  renderStatusChart(allOrders);
+  renderRecentOrders(allOrders.slice(0, 10));
+};
+
 async function loadOrders() {
   const tbody = $('ordersTableBody');
   tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:20px;"><i class="fas fa-spinner fa-spin"></i> Carregando...</td></tr>';
 
   try {
     let query = sb.from('pedidos').select('*').order('created_at', { ascending: false });
-    const status = $('filterStatus').value;
-    const date = $('filterDate').value;
-    if (status) query = query.eq('status', status);
-    if (date) query = query.gte('created_at', date + 'T00:00:00').lte('created_at', date + 'T23:59:59');
-
     const { data, error } = await query;
     if (error) throw error;
     allOrders = data || [];
-
-    if (!allOrders.length) {
-      tbody.innerHTML = '';
-      $('ordersEmpty').classList.remove('hidden');
-      return;
-    }
-    $('ordersEmpty').classList.add('hidden');
-
-    tbody.innerHTML = allOrders.map(o => {
-      const items = Array.isArray(o.itens) ? o.itens.map(i => `${i.qty}x ${i.nome}`).join(', ') : '';
-      const rowNewClass = isOrderNew(o) ? ' class="order-row--new"' : '';
-      return `
-        <tr data-order-id="${o.id}"${rowNewClass}>
-          <td><strong>#${o.id}</strong></td>
-          <td>${escapeHtml(o.nome_cliente || 'N/A')}</td>
-          <td title="${escapeHtml(items)}">${escapeHtml(items.slice(0, 40))}${items.length > 40 ? '...' : ''}</td>
-          <td><strong>${formatMoney(o.total)}</strong></td>
-          <td>${escapeHtml(o.forma_entrega || 'delivery')}</td>
-          <td>${orderStatusCellMarkup(o)}</td>
-          <td>${o.enviado_saipos
-            ? '<span title="Enviado para Saipos" style="color:#4CAF50;"><i class="fas fa-check-circle"></i></span>'
-            : '<span style="color:#bbb;" title="Não enviado">—</span>'
-          }</td>
-          <td>${formatDate(o.created_at)}</td>
-          <td><span class="order-age" data-order-created-at="${escapeHtml(o.created_at || '')}" data-order-status="${escapeHtml(o.status || '')}"></span></td>
-          <td><button class="btn btn--outline-sm btn--sm" onclick="viewOrder(${o.id})"><i class="fas fa-eye"></i></button></td>
-        </tr>`;
-    }).join('');
-    bindOrderStatusEvents(tbody);
-    updateOrderAges();
-    ensureOrderAgeTimer();
+    renderOrderTabCounts();
+    renderOrdersForCurrentTab();
+    refreshAdminNewOrderBadgeCount();
   } catch (err) {
     console.error('Orders error:', err);
     tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#E53935;">Erro ao carregar pedidos</td></tr>';
@@ -5022,12 +7273,18 @@ async function createTableOrder(event) {
 }
 
 window.viewOrder = function(id) {
-  const order = allOrders.find(o => o.id === id);
+  const order = allOrders.find(o => Number(o.id) === Number(id));
   if (!order) return;
+  markOrderAsActed(order.id);
+  hideNewOrderVisuals(order.id);
+  refreshAdminNewOrderBadgeCount();
+  _currentViewOrder = order;  // armazena para os botões de impressão do modal
   const items = Array.isArray(order.itens) ? order.itens : [];
   const paymentMethod = String(order.forma_pagamento || '').toLowerCase();
   const paymentMethodMap = {
-    erede: 'Online (e-Rede)',
+    erede: 'Crédito online',
+    erede_debito: 'Débito online',
+    pix: 'Pix online',
     na_entrega_dinheiro: 'Na entrega - Dinheiro',
     na_entrega_cartao: 'Na entrega - Cartão',
     na_entrega_pix: 'Na entrega - Pix'
@@ -5046,9 +7303,10 @@ window.viewOrder = function(id) {
         <div><strong>Cliente:</strong> ${escapeHtml(order.nome_cliente || 'N/A')}</div>
         <div><strong>Email:</strong> ${escapeHtml(order.email_cliente || 'N/A')}</div>
         <div><strong>Telefone:</strong> ${escapeHtml(order.telefone_cliente || 'N/A')}</div>
-        <div><strong>Entrega:</strong> ${escapeHtml(order.forma_entrega || 'delivery')}</div>
+        <div style="grid-column:1/-1;"><strong>Entrega:</strong> ${escapeHtml(order.forma_entrega || 'delivery')}</div>
         <div style="grid-column:1/-1;"><strong>Pagamento:</strong> ${escapeHtml(paymentLabel)} · ${paymentStatusBadge}</div>
         <div style="grid-column:1/-1;"><strong>Endereço:</strong> ${escapeHtml(order.endereco_entrega || 'N/A')}</div>
+        ${order.agendamento_entrega ? `<div style="grid-column:1/-1;background:#fff8e1;border:1px solid #f9a825;border-radius:6px;padding:6px 10px;display:flex;align-items:center;gap:8px;"><i class="fas fa-clock" style="color:#f9a825;"></i><strong>Entrega agendada:</strong> ${new Date(order.agendamento_entrega).toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}</div>` : ''}
         ${order.observacoes ? `<div style="grid-column:1/-1;"><strong>Observações:</strong> ${escapeHtml(order.observacoes)}</div>` : ''}
       </div>
       <div>
@@ -5066,6 +7324,15 @@ window.viewOrder = function(id) {
       <div style="font-size:.75rem;color:#999;">
         Criado em: ${new Date(order.created_at).toLocaleString('pt-BR')}
         ${order.checkout_url ? ` · <a href="${escapeHtml(order.checkout_url)}" target="_blank" rel="noopener noreferrer" style="color:#2196F3;">Link pagamento</a>` : ''}
+      </div>
+      <!-- Botões de Impressão -->
+      <div style="display:flex;gap:8px;padding-top:10px;border-top:1px solid #eee;">
+        <button class="btn btn--outline btn--sm" onclick="printKitchenTicket()" style="flex:1;gap:6px;">
+          <i class="fas fa-fire" style="color:#e65100;"></i> Cozinha
+        </button>
+        <button class="btn btn--outline btn--sm" onclick="printTableBill()" style="flex:1;gap:6px;">
+          <i class="fas fa-receipt" style="color:#1565c0;"></i> Nota Mesa
+        </button>
       </div>
       <!-- Botão Saipos -->
       <div style="padding-top:10px;border-top:1px solid #eee;">
@@ -5134,6 +7401,8 @@ function openProductCreateModal() {
   $('productForm').reset();
   $('productId').value = '';
   $('productDisponivel').checked = true;
+  if ($('productDestaque')) $('productDestaque').checked = false;
+  document.querySelectorAll('.dia-check').forEach(cb => { cb.checked = false; });
   window.productMidiasState = [];
   renderProductMidiasPreview();
   $('productMidias').value = '';
@@ -5216,21 +7485,434 @@ $('btnToggleCatManager')?.addEventListener('click', () => {
   if (!hidden) renderCategoryManager();
 });
 
-$('btnCreateCategory')?.addEventListener('click', async () => {
-  const name = await showCatInputModal({
-    title: 'Nova Categoria',
-    label: 'Nome da categoria',
-    placeholder: 'Ex: Entradas, Sobremesas...',
-  });
-  if (!name) return;
-  const exists = allProducts.some(p => p.categoria?.toLowerCase() === name.toLowerCase());
-  if (exists) { showToast('Já existe uma categoria com esse nome', 'error'); return; }
-  let order = await loadCatOrderFromConfig();
-  if (!order.includes(name)) order.push(name);
-  await saveCatOrderToConfig(order);
-  renderCategoryManager();
-  showToast(`Categoria "${name}" criada!`, 'success');
+$('btnCreateCategory')?.addEventListener('click', () => {
+  const panel = $('catManagerPanel');
+  if (panel.classList.contains('hidden')) {
+    panel.classList.remove('hidden');
+    renderCategoryManager();
+  }
+  openCatEditModal();
 });
+
+$('btnToggleFeaturedManager')?.addEventListener('click', () => {
+  const panel = $('featuredManagerPanel');
+  if (!panel) return;
+  const hidden = panel.classList.toggle('hidden');
+  if (!hidden) renderFeaturedManager();
+});
+
+$('btnAddFeaturedProduct')?.addEventListener('click', async () => {
+  const select = $('featuredProductSelect');
+  const id = Number(select?.value || 0);
+  if (!id) {
+    showToast('Selecione um produto para adicionar no destaque', 'error');
+    return;
+  }
+
+  try {
+    const { error } = await sb.from('produtos').update({ destaque: true }).eq('id', id);
+    if (error) throw error;
+
+    const order = await loadFeaturedOrderFromConfig();
+    if (!order.includes(id)) {
+      order.push(id);
+      await saveFeaturedOrderToConfig(order);
+    }
+
+    await loadProducts();
+    $('featuredManagerPanel')?.classList.remove('hidden');
+    showToast('Produto adicionado aos destaques', 'success');
+  } catch (err) {
+    showToast('Erro ao adicionar destaque: ' + err.message, 'error');
+  }
+});
+
+// -- helpers --------------------------------------------------
+async function loadSiteConfigValue(key) {
+  try {
+    const { data } = await sb.from('site_config').select('value').eq('key', key).maybeSingle();
+    return data?.value || '';
+  } catch { return ''; }
+}
+
+async function updateCatSchedule(oldName, newName, inLunch, inDinner) {
+  const [lunchVal, dinnerVal] = await Promise.all([
+    loadSiteConfigValue('lunch_categories'),
+    loadSiteConfigValue('dinner_categories'),
+  ]);
+  let lunchCats  = lunchVal.split(',').map(s => s.trim()).filter(Boolean);
+  let dinnerCats = dinnerVal.split(',').map(s => s.trim()).filter(Boolean);
+  // Remove old name from both
+  lunchCats  = lunchCats.filter(c => c !== oldName);
+  dinnerCats = dinnerCats.filter(c => c !== oldName);
+  if (inLunch  && !lunchCats.includes(newName))  lunchCats.push(newName);
+  if (inDinner && !dinnerCats.includes(newName)) dinnerCats.push(newName);
+  await Promise.all([
+    saveSiteConfigKey('lunch_categories',  lunchCats.join(',')),
+    saveSiteConfigKey('dinner_categories', dinnerCats.join(',')),
+  ]);
+}
+
+// -- render ----------------------------------------------------
+async function renderCategoryManager() {
+  const list = $('catManagerList');
+  list.innerHTML = '<div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>Carregando...</p></div>';
+
+  const [catOrder, lunchVal, dinnerVal] = await Promise.all([
+    loadCatOrderFromConfig(),
+    loadSiteConfigValue('lunch_categories'),
+    loadSiteConfigValue('dinner_categories'),
+  ]);
+  const lunchCats  = lunchVal.split(',').map(s => s.trim()).filter(Boolean);
+  const dinnerCats = dinnerVal.split(',').map(s => s.trim()).filter(Boolean);
+  const productCats = [...new Set(allProducts.map(p => p.categoria).filter(Boolean))];
+  const allCats = [...catOrder, ...productCats.filter(c => !catOrder.includes(c))];
+
+  list.innerHTML = '';
+
+  if (!allCats.length) {
+    const empty = document.createElement('div');
+    empty.className = 'cat-empty-hero';
+    empty.innerHTML = `
+      <i class="fas fa-layer-group"></i>
+      <p>Nenhuma categoria criada ainda</p>
+      <button class="btn btn--primary" onclick="openCatEditModal()"><i class="fas fa-plus"></i> Criar primeira categoria</button>
+    `;
+    list.appendChild(empty);
+    return;
+  }
+
+  for (let i = 0; i < allCats.length; i++) {
+    const cat = allCats[i];
+    const prods = allProducts.filter(p => p.categoria === cat);
+    const subcatOrder = await loadSubcatOrderFromConfig(cat);
+    const subcatsFromProds = [...new Set(prods.map(p => p.subcategoria).filter(Boolean))];
+    const subcats = [...subcatOrder, ...subcatsFromProds.filter(s => !subcatOrder.includes(s))];
+
+    const inLunch  = lunchCats.includes(cat);
+    const inDinner = dinnerCats.includes(cat);
+    const canDelete = prods.length === 0;
+    const catJs = JSON.stringify(cat).replace(/"/g, '&quot;');
+
+    let schedHtml = '';
+    if (inLunch)             schedHtml += '<span class="cat-sched-badge cat-sched-badge--lunch"><i class="fas fa-sun"></i> Almoço</span>';
+    if (inDinner)            schedHtml += '<span class="cat-sched-badge cat-sched-badge--dinner"><i class="fas fa-moon"></i> Jantar</span>';
+    if (!inLunch && !inDinner) schedHtml += '<span class="cat-sched-badge cat-sched-badge--always"><i class="fas fa-clock"></i> Sempre</span>';
+
+    const item = document.createElement('div');
+    item.className = 'cat-list-item';
+    item.innerHTML = `
+      <div class="cat-list-item__order">
+        <button class="cat-arrow" onclick="moveCat(${catJs},-1)" ${i === 0 ? 'disabled' : ''}><i class="fas fa-chevron-up"></i></button>
+        <button class="cat-arrow" onclick="moveCat(${catJs},1)"  ${i === allCats.length - 1 ? 'disabled' : ''}><i class="fas fa-chevron-down"></i></button>
+      </div>
+      <div class="cat-list-item__body" onclick="openCatEditModal(${catJs})">
+        <span class="cat-list-item__name">${escapeHtml(cat)}</span>
+        <div class="cat-list-item__meta">
+          ${schedHtml}
+          <span class="cat-list-item__stat"><i class="fas fa-box"></i> ${prods.length} prod.</span>
+          ${subcats.length ? `<span class="cat-list-item__stat"><i class="fas fa-list"></i> ${subcats.length} subcat${subcats.length !== 1 ? 's' : ''}</span>` : ''}
+        </div>
+      </div>
+      <div class="cat-list-item__actions">
+        <button class="cat-btn cat-btn--ghost cat-btn--icon" title="Editar" onclick="openCatEditModal(${catJs})"><i class="fas fa-pen"></i></button>
+        <button class="cat-btn cat-btn--danger cat-btn--icon" title="Excluir" onclick="deleteCat(${catJs})" ${!canDelete ? 'disabled title=&quot;Remova os produtos antes&quot;' : ''}><i class="fas fa-trash-alt"></i></button>
+      </div>
+    `;
+    list.appendChild(item);
+  }
+
+  // Add category button at bottom
+  const addRow = document.createElement('button');
+  addRow.className = 'cat-add-row-btn';
+  addRow.innerHTML = '<i class="fas fa-plus"></i> Nova Categoria';
+  addRow.onclick = () => openCatEditModal();
+  list.appendChild(addRow);
+}
+
+// -- edit modal state ------------------------------------------
+let _catEditSubcats = [];
+let _catEditOriginalName = null;
+
+window.openCatEditModal = async function(catName = null) {
+  _catEditOriginalName = catName || null;
+  _catEditSubcats = [];
+
+  $('catEditTitle').textContent = catName ? `Editar: ${catName}` : 'Nova Categoria';
+  $('catEditOriginalName').value = catName || '';
+  $('catEditName').value = catName || '';
+
+  const [lunchVal, dinnerVal] = await Promise.all([
+    loadSiteConfigValue('lunch_categories'),
+    loadSiteConfigValue('dinner_categories'),
+  ]);
+  const lunchCats  = lunchVal.split(',').map(s => s.trim()).filter(Boolean);
+  const dinnerCats = dinnerVal.split(',').map(s => s.trim()).filter(Boolean);
+  $('catEditLunch').checked  = catName ? lunchCats.includes(catName)  : false;
+  $('catEditDinner').checked = catName ? dinnerCats.includes(catName) : false;
+
+  if (catName) {
+    const prods = allProducts.filter(p => p.categoria === catName);
+    const subcatOrder = await loadSubcatOrderFromConfig(catName);
+    const subcatsFromProds = [...new Set(prods.map(p => p.subcategoria).filter(Boolean))];
+    _catEditSubcats = [...subcatOrder, ...subcatsFromProds.filter(s => !subcatOrder.includes(s))];
+  }
+
+  renderCatEditSubcats();
+  renderCatEditProducts(catName);
+  // hide/show mover panel
+  $('catEditMoverPanel')?.classList.add('hidden');
+  if ($('catEditMoverArrow')) $('catEditMoverArrow').style.transform = '';
+  $('catEditModal').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => $('catEditName')?.focus(), 80);
+};
+
+window.closeCatEditModal = function() {
+  $('catEditModal')?.classList.add('hidden');
+  document.body.style.overflow = '';
+};
+
+function renderCatEditSubcats() {
+  const list = $('catEditSubcatList');
+  if (!list) return;
+  if (!_catEditSubcats.length) {
+    list.innerHTML = '<p class="cat-edit-subcat-empty">Nenhuma subcategoria — adicione abaixo se necessário</p>';
+    return;
+  }
+  list.innerHTML = _catEditSubcats.map((s, i) => `
+    <div class="cat-edit-subcat-row">
+      <div class="cat-card__arrows">
+        <button type="button" class="cat-arrow" onclick="moveCatEditSubcat(${i},-1)" ${i === 0 ? 'disabled' : ''}><i class="fas fa-chevron-up"></i></button>
+        <button type="button" class="cat-arrow" onclick="moveCatEditSubcat(${i},1)"  ${i === _catEditSubcats.length - 1 ? 'disabled' : ''}><i class="fas fa-chevron-down"></i></button>
+      </div>
+      <span class="cat-edit-subcat-row__name">${escapeHtml(s)}</span>
+      <button type="button" class="cat-btn cat-btn--danger cat-btn--icon" onclick="removeCatEditSubcat(${i})"><i class="fas fa-times"></i></button>
+    </div>
+  `).join('');
+}
+
+window.moveCatEditSubcat = function(idx, dir) {
+  const ni = idx + dir;
+  if (ni < 0 || ni >= _catEditSubcats.length) return;
+  [_catEditSubcats[idx], _catEditSubcats[ni]] = [_catEditSubcats[ni], _catEditSubcats[idx]];
+  renderCatEditSubcats();
+};
+
+window.removeCatEditSubcat = function(idx) {
+  _catEditSubcats.splice(idx, 1);
+  renderCatEditSubcats();
+};
+
+window.addSubcatToEdit = function() {
+  const input = $('catEditSubcatInput');
+  const name = input?.value.trim();
+  if (!name) { input?.focus(); return; }
+  if (_catEditSubcats.some(s => s.toLowerCase() === name.toLowerCase())) {
+    showToast('Subcategoria já existe', 'error'); return;
+  }
+  _catEditSubcats.push(name);
+  input.value = '';
+  renderCatEditSubcats();
+  input.focus();
+};
+
+window.saveCatEdit = async function() {
+  const name = $('catEditName')?.value.trim();
+  if (!name) { showToast('Nome é obrigatório', 'error'); $('catEditName')?.focus(); return; }
+
+  const originalName = _catEditOriginalName;
+  const isNew    = !originalName;
+  const isRename = !isNew && name !== originalName;
+
+  // Duplicate check
+  if (isNew || isRename) {
+    const catOrder = await loadCatOrderFromConfig();
+    const dupeInOrder = catOrder.some(c => c.toLowerCase() === name.toLowerCase() && c !== originalName);
+    const dupeInProds = allProducts.some(p => p.categoria?.toLowerCase() === name.toLowerCase() && p.categoria !== originalName);
+    if (dupeInOrder || dupeInProds) { showToast('Já existe uma categoria com esse nome', 'error'); return; }
+  }
+
+  const btn = $('catEditSaveBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Salvando...';
+
+  try {
+    if (isRename) {
+      const { error } = await sb.from('produtos').update({ categoria: name }).eq('categoria', originalName);
+      if (error) throw error;
+    }
+
+    // Category order
+    let catOrder = await loadCatOrderFromConfig();
+    if (isNew) {
+      catOrder.push(name);
+    } else if (isRename) {
+      const idx = catOrder.indexOf(originalName);
+      if (idx !== -1) catOrder[idx] = name; else catOrder.push(name);
+    }
+    await saveCatOrderToConfig(catOrder);
+
+    // Subcategory order
+    if (isRename) {
+      const old = await loadSubcatOrderFromConfig(originalName);
+      if (old.length) await saveSubcatOrderToConfig(name, old);
+    }
+    await saveSubcatOrderToConfig(name, _catEditSubcats);
+
+    // Schedule
+    await updateCatSchedule(originalName || name, name, $('catEditLunch').checked, $('catEditDinner').checked);
+
+    await loadProducts();
+    if (isNew) {
+      // Reopen in edit mode so user can assign products right away
+      closeCatEditModal();
+      showToast(`Categoria "${name}" criada! Adicione produtos abaixo.`, 'success');
+      openCatEditModal(name);
+    } else {
+      closeCatEditModal();
+      showToast('Categoria atualizada!', 'success');
+    }
+  } catch (err) {
+    showToast('Erro: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-save"></i> Salvar Categoria';
+  }
+};
+
+window.toggleSubcatSection = function() {}; // compatibility stub
+
+// -- products section in edit modal ---------------------------
+function renderCatEditProducts(catName) {
+  const section = $('catEditProductsSection');
+  const prodList = $('catEditProdList');
+  const warning  = $('catEditEmptyWarning');
+  const countEl  = $('catEditProdCount');
+  if (!section || !prodList) return;
+
+  if (!catName) {
+    // New category — hide section until after save
+    section.classList.add('hidden');
+    return;
+  }
+  section.classList.remove('hidden');
+
+  const prods = allProducts.filter(p => p.categoria === catName);
+  countEl.textContent = `(${prods.length})`;
+
+  if (!prods.length) {
+    warning.classList.remove('hidden');
+    prodList.innerHTML = '';
+  } else {
+    warning.classList.add('hidden');
+    prodList.innerHTML = prods.map(p => {
+      const pJs = JSON.stringify(p.id);
+      return `
+        <div class="cat-edit-prod-row">
+          <span class="cat-edit-prod-row__name">${escapeHtml(p.nome)}</span>
+          <span class="cat-edit-prod-row__sub">${p.subcategoria ? escapeHtml(p.subcategoria) : ''}</span>
+          <span class="cat-edit-prod-row__price">${formatMoney(p.preco)}</span>
+          <button type="button" class="cat-btn cat-btn--danger cat-btn--icon" title="Remover desta categoria"
+            onclick="removeProdFromEditCat(${pJs})"><i class="fas fa-times"></i></button>
+        </div>`;
+    }).join('');
+  }
+  renderCatEditMoverProds(catName);
+}
+
+function renderCatEditMoverProds(catName, filter = '') {
+  const el = $('catEditOtherProdList');
+  if (!el) return;
+  const q = filter.toLowerCase();
+  const others = allProducts.filter(p =>
+    p.categoria !== catName &&
+    (!q || p.nome.toLowerCase().includes(q) || (p.categoria||'').toLowerCase().includes(q))
+  );
+  if (!others.length) {
+    el.innerHTML = '<p class="cat-edit-subcat-empty">Nenhum produto encontrado.</p>';
+    return;
+  }
+  // Group by category
+  const groups = {};
+  others.forEach(p => {
+    const g = p.categoria || '(sem categoria)';
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(p);
+  });
+  el.innerHTML = Object.entries(groups).map(([grp, items]) => `
+    <div class="cat-edit-mover-group">
+      <div class="cat-edit-mover-group__title">${escapeHtml(grp)}</div>
+      ${items.map(p => {
+        const pJs = JSON.stringify(p.id);
+        return `
+          <div class="cat-edit-mover-row">
+            <span class="cat-edit-mover-row__name">${escapeHtml(p.nome)}</span>
+            <span class="cat-edit-mover-row__price">${formatMoney(p.preco)}</span>
+            <button type="button" class="cat-btn cat-btn--ghost cat-btn--sm" onclick="moveProdToEditCat(${pJs})">
+              <i class="fas fa-arrow-right"></i> Mover para cá
+            </button>
+          </div>`;
+      }).join('')}
+    </div>
+  `).join('');
+}
+
+window.filterCatEditMoverProds = function() {
+  const q = $('catEditProdSearch')?.value || '';
+  renderCatEditMoverProds(_catEditOriginalName || $('catEditName')?.value.trim(), q);
+};
+
+window.toggleCatEditMover = function() {
+  const panel = $('catEditMoverPanel');
+  const arrow = $('catEditMoverArrow');
+  const hidden = panel.classList.toggle('hidden');
+  arrow.style.transform = hidden ? '' : 'rotate(180deg)';
+  if (!hidden) {
+    renderCatEditMoverProds(_catEditOriginalName || $('catEditName')?.value.trim());
+    setTimeout(() => $('catEditProdSearch')?.focus(), 80);
+  }
+};
+
+window.moveProdToEditCat = async function(prodId) {
+  const catName = _catEditOriginalName || $('catEditName')?.value.trim();
+  if (!catName) return;
+  try {
+    const { error } = await sb.from('produtos').update({ categoria: catName }).eq('id', prodId);
+    if (error) throw error;
+    // Update local cache
+    const p = allProducts.find(x => x.id === prodId);
+    if (p) p.categoria = catName;
+    renderCatEditProducts(catName);
+    // refresh mover list
+    renderCatEditMoverProds(catName, $('catEditProdSearch')?.value || '');
+    showToast('Produto movido!', 'success');
+  } catch (err) {
+    showToast('Erro: ' + err.message, 'error');
+  }
+};
+
+window.removeProdFromEditCat = async function(prodId) {
+  const ok = await showCatConfirmModal({
+    title: 'Remover produto da categoria',
+    message: 'O produto ficará sem categoria. Deseja continuar?',
+    confirmLabel: 'Remover',
+  });
+  if (!ok) return;
+  try {
+    const { error } = await sb.from('produtos').update({ categoria: null }).eq('id', prodId);
+    if (error) throw error;
+    const p = allProducts.find(x => x.id === prodId);
+    if (p) p.categoria = null;
+    const catName = _catEditOriginalName;
+    renderCatEditProducts(catName);
+    showToast('Produto removido da categoria', 'success');
+  } catch (err) {
+    showToast('Erro: ' + err.message, 'error');
+  }
+};
+
+
 
 async function loadCatOrderFromConfig() {
   try {
@@ -5241,10 +7923,19 @@ async function loadCatOrderFromConfig() {
 }
 
 async function saveSiteConfigKey(key, value) {
-  const { error: updErr } = await sb.from('site_config').update({ value }).eq('key', key);
-  if (updErr) {
-    // Row doesn't exist yet — insert it
-    await sb.from('site_config').insert({ key, value });
+  // Update first; use .select() so we can detect if any row was matched
+  const { data: updated, error: updErr } = await sb
+    .from('site_config')
+    .update({ value })
+    .eq('key', key)
+    .select('key');
+  if (updErr) { console.error('[site_config] update error:', updErr); return; }
+  // No row matched ? first save, insert with safe defaults for required columns
+  if (!updated || updated.length === 0) {
+    const { error: insErr } = await sb
+      .from('site_config')
+      .insert({ key, value, type: 'json', label: key, section: 'app' });
+    if (insErr) console.error('[site_config] insert error:', insErr);
   }
 }
 
@@ -5270,99 +7961,120 @@ function normalizeCategoryKeyAdmin(name) {
   return String(name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '_');
 }
 
-async function renderCategoryManager() {
-  const list = $('catManagerList');
-  list.innerHTML = '<div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>Carregando...</p></div>';
-
-  const catOrder = await loadCatOrderFromConfig();
-  const productCats = [...new Set(allProducts.map(p => p.categoria).filter(Boolean))];
-  const allCats = [...catOrder, ...productCats.filter(c => !catOrder.includes(c))];
-
-  if (!allCats.length) {
-    list.innerHTML = '<div class="empty-state"><i class="fas fa-layer-group"></i><p>Nenhuma categoria encontrada</p></div>';
-    return;
-  }
-
-  list.innerHTML = '';
-  for (let i = 0; i < allCats.length; i++) {
-    const cat = allCats[i];
-    const prods = allProducts.filter(p => p.categoria === cat);
-    const subcats = [...new Set(prods.map(p => p.subcategoria).filter(Boolean))];
-
-    const subcatOrder = await loadSubcatOrderFromConfig(cat);
-    subcats.sort((a, b) => {
-      const ai = subcatOrder.indexOf(a);
-      const bi = subcatOrder.indexOf(b);
-      return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-    });
-
-    const catKey = normalizeCategoryKeyAdmin(cat);
-    const canDelete = prods.length === 0;
-    const hasSubcats = subcats.length > 0;
-
-    const card = document.createElement('div');
-    card.className = 'cat-card';
-    card.dataset.cat = cat;
-
-    card.innerHTML = `
-      <div class="cat-card__head">
-        <div class="cat-card__arrows">
-          <button class="cat-arrow" title="Subir" onclick="moveCat('${escapeHtml(cat)}', -1)" ${i === 0 ? 'disabled' : ''}><i class="fas fa-chevron-up"></i></button>
-          <button class="cat-arrow" title="Descer" onclick="moveCat('${escapeHtml(cat)}', 1)" ${i === allCats.length - 1 ? 'disabled' : ''}><i class="fas fa-chevron-down"></i></button>
-        </div>
-        <div class="cat-card__dot"></div>
-        <span class="cat-card__name">${escapeHtml(cat)}</span>
-        <span class="cat-card__badge"><i class="fas fa-box"></i> ${prods.length} produto${prods.length !== 1 ? 's' : ''}</span>
-        <div class="cat-card__actions">
-          <button class="cat-btn cat-btn--ghost" onclick="renameCat('${escapeHtml(cat)}')">
-            <i class="fas fa-pen"></i> Renomear
-          </button>
-          ${hasSubcats
-            ? `<button class="cat-btn cat-btn--expand" id="expandBtn_${catKey}" onclick="toggleSubcatSection('${catKey}')">
-                <i class="fas fa-list"></i> Subcats (${subcats.length}) <i class="fas fa-chevron-down expand-arrow"></i>
-               </button>`
-            : `<button class="cat-btn cat-btn--ghost" onclick="addSubcatPrompt('${escapeHtml(cat)}')">
-                <i class="fas fa-plus"></i> Subcategoria
-               </button>`
-          }
-          <button class="cat-btn cat-btn--danger" onclick="deleteCat('${escapeHtml(cat)}')"
-            ${!canDelete ? 'disabled title="Mova ou exclua os produtos antes de excluir a categoria"' : ''}>
-            <i class="fas fa-trash-alt"></i>
-          </button>
-        </div>
-      </div>
-      ${hasSubcats ? `
-      <div class="cat-card__subcats hidden" id="subcats_${catKey}">
-        ${subcats.map((s, si) => `
-          <div class="subcat-row">
-            <div class="cat-card__arrows">
-              <button class="cat-arrow" onclick="moveSubcat('${escapeHtml(cat)}','${escapeHtml(s)}',-1)" ${si === 0 ? 'disabled' : ''}><i class="fas fa-chevron-up"></i></button>
-              <button class="cat-arrow" onclick="moveSubcat('${escapeHtml(cat)}','${escapeHtml(s)}',1)" ${si === subcats.length - 1 ? 'disabled' : ''}><i class="fas fa-chevron-down"></i></button>
-            </div>
-            <div class="subcat-row__dot"></div>
-            <span class="subcat-row__name">${escapeHtml(s)}</span>
-            <span class="subcat-row__count">${prods.filter(p => p.subcategoria === s).length} prod.</span>
-            <div class="subcat-row__actions">
-              <button class="cat-btn cat-btn--icon" title="Renomear" onclick="renameSubcat('${escapeHtml(cat)}','${escapeHtml(s)}')"><i class="fas fa-pen"></i></button>
-              <button class="cat-btn cat-btn--danger cat-btn--icon" title="Excluir" onclick="deleteSubcat('${escapeHtml(cat)}','${escapeHtml(s)}')"><i class="fas fa-trash-alt"></i></button>
-            </div>
-          </div>`).join('')}
-        <button class="cat-card__add-subcat" onclick="addSubcatPrompt('${escapeHtml(cat)}')">
-          <i class="fas fa-plus"></i> Nova Subcategoria
-        </button>
-      </div>` : ''}
-    `;
-    list.appendChild(card);
+async function loadFeaturedOrderFromConfig() {
+  try {
+    const raw = await loadSiteConfigValue('featured_order');
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(v => Number(v)).filter(v => Number.isFinite(v) && v > 0);
+  } catch (_) {
+    return [];
   }
 }
 
-window.toggleSubcatSection = function(catKey) {
-  const el = document.getElementById('subcats_' + catKey);
-  const btn = document.getElementById('expandBtn_' + catKey);
-  if (!el) return;
-  el.classList.toggle('hidden');
-  btn?.classList.toggle('open');
+async function saveFeaturedOrderToConfig(order) {
+  const safeOrder = Array.from(new Set((order || []).map(v => Number(v)).filter(v => Number.isFinite(v) && v > 0)));
+  await saveSiteConfigKey('featured_order', JSON.stringify(safeOrder));
+}
+
+function getProductThumbHtmlAdmin(product) {
+  const midiasArr = Array.isArray(product?.midias) ? product.midias : (product?.midias ? [product.midias] : []);
+  const typesArr = Array.isArray(product?.midias_types) ? product.midias_types : (product?.midias_types ? [product.midias_types] : []);
+  if (!midiasArr.length) return '<div class="table__img" style="width:100%;height:100%;background:#f0f0f0;"></div>';
+  const idx = typesArr[0] === 'video' ? midiasArr.findIndex((_, i) => typesArr[i] === 'image') : 0;
+  const finalIdx = idx >= 0 ? idx : 0;
+  const url = midiasArr[finalIdx];
+  const type = typesArr[finalIdx] || 'image';
+  if (!url) return '<div class="table__img" style="width:100%;height:100%;background:#f0f0f0;"></div>';
+  if (type === 'video') return `<video src="${escapeHtml(url)}" muted playsinline preload="metadata"></video>`;
+  return `<img src="${escapeHtml(url)}" alt="">`;
+}
+
+function getFeaturedProductsOrdered(orderIds) {
+  const featured = allProducts.filter(p => Boolean(p.destaque));
+  const mapIdx = new Map((orderIds || []).map((id, idx) => [id, idx]));
+  return featured.sort((a, b) => {
+    const ai = mapIdx.has(a.id) ? mapIdx.get(a.id) : Number.MAX_SAFE_INTEGER;
+    const bi = mapIdx.has(b.id) ? mapIdx.get(b.id) : Number.MAX_SAFE_INTEGER;
+    if (ai !== bi) return ai - bi;
+    const byOrder = (a.ordem || 0) - (b.ordem || 0);
+    if (byOrder !== 0) return byOrder;
+    return String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR');
+  });
+}
+
+async function renderFeaturedManager() {
+  const list = $('featuredManagerList');
+  const select = $('featuredProductSelect');
+  if (!list || !select) return;
+
+  const order = await loadFeaturedOrderFromConfig();
+  const featuredItems = getFeaturedProductsOrdered(order);
+  const featuredSet = new Set(featuredItems.map(p => p.id));
+  const availableToAdd = allProducts
+    .filter(p => !featuredSet.has(p.id))
+    .sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR'));
+
+  select.innerHTML = '<option value="">Selecionar produto para destaque</option>' +
+    availableToAdd.map(p => `<option value="${p.id}">${escapeHtml(p.nome)} (${formatMoney(p.preco)})</option>`).join('');
+
+  if (!featuredItems.length) {
+    list.innerHTML = '<div class="featured-manager-empty"><i class="fas fa-star"></i> Nenhum produto em destaque. Selecione um item acima para montar a roleta.</div>';
+    return;
+  }
+
+  list.innerHTML = featuredItems.map((p, idx) => `
+    <div class="featured-admin-item">
+      <div class="featured-admin-item__order">
+        <button type="button" onclick="moveFeatured(${p.id}, -1)" ${idx === 0 ? 'disabled' : ''} title="Subir"><i class="fas fa-chevron-up"></i></button>
+        <button type="button" onclick="moveFeatured(${p.id}, 1)" ${idx === featuredItems.length - 1 ? 'disabled' : ''} title="Descer"><i class="fas fa-chevron-down"></i></button>
+      </div>
+      <div class="featured-admin-item__thumb">${getProductThumbHtmlAdmin(p)}</div>
+      <div class="featured-admin-item__content">
+        <strong>${escapeHtml(p.nome)}</strong>
+        <span>${escapeHtml((p.descricao || 'Sem descrição').slice(0, 110))}</span>
+        <small>${formatMoney(p.preco)}</small>
+      </div>
+      <div class="featured-admin-item__actions">
+        <button class="btn btn--outline-sm btn--sm" onclick="editProduct(${p.id})"><i class="fas fa-pen"></i> Editar completo</button>
+        <button class="btn btn--danger btn--sm" onclick="removeFeatured(${p.id})"><i class="fas fa-times"></i></button>
+      </div>
+    </div>
+  `).join('');
+}
+
+window.moveFeatured = async function(productId, dir) {
+  const id = Number(productId);
+  if (!id || !Number.isFinite(id)) return;
+  const order = await loadFeaturedOrderFromConfig();
+  const featuredItems = getFeaturedProductsOrdered(order);
+  const ids = featuredItems.map(p => p.id);
+  const idx = ids.indexOf(id);
+  if (idx === -1) return;
+  const nextIdx = idx + Number(dir || 0);
+  if (nextIdx < 0 || nextIdx >= ids.length) return;
+  [ids[idx], ids[nextIdx]] = [ids[nextIdx], ids[idx]];
+  await saveFeaturedOrderToConfig(ids);
+  renderFeaturedManager();
 };
+
+window.removeFeatured = async function(productId) {
+  const id = Number(productId);
+  if (!id || !Number.isFinite(id)) return;
+  try {
+    const { error } = await sb.from('produtos').update({ destaque: false }).eq('id', id);
+    if (error) throw error;
+    const order = await loadFeaturedOrderFromConfig();
+    await saveFeaturedOrderToConfig(order.filter(v => v !== id));
+    await loadProducts();
+    $('featuredManagerPanel')?.classList.remove('hidden');
+    showToast('Produto removido da roleta', 'success');
+  } catch (err) {
+    showToast('Erro ao remover destaque: ' + err.message, 'error');
+  }
+};
+
 
 window.moveCat = async function(cat, dir) {
   let order = await loadCatOrderFromConfig();
@@ -5511,6 +8223,7 @@ async function loadProducts() {
     populateCategoryFilter();
     renderProductsTable();
     if (!$('catManagerPanel')?.classList.contains('hidden')) renderCategoryManager();
+    if (!$('featuredManagerPanel')?.classList.contains('hidden')) renderFeaturedManager();
   } catch (err) {
     console.error('Products error:', err);
   }
@@ -5518,9 +8231,11 @@ async function loadProducts() {
 
 function populateCategoryFilter() {
   const sel = $('filterCategory');
+  const savedCat = sel.value; // Preserva filtro ativo
   const cats = [...new Set(allProducts.map(p => p.categoria).filter(Boolean))];
   sel.innerHTML = '<option value="">Todas Categorias</option>' +
     cats.map(c => `<option value="${c}">${formatCategory(c)}</option>`).join('');
+  sel.value = savedCat; // Restaura filtro (volta para '' se a categoria sumiu)
   // Populate category datalist in form
   const dl = $('categoryList');
   if (dl) dl.innerHTML = cats.map(c => `<option value="${c}">`).join('');
@@ -5544,12 +8259,12 @@ function renderProductsTable() {
       const idx = p.midias_types && p.midias_types[0] === 'video' ? p.midias.findIndex((_, i) => p.midias_types[i] === 'image') : 0;
       const url = p.midias[idx >= 0 ? idx : 0];
       if (url && p.midias_types[idx >= 0 ? idx : 0] === 'image') {
-        thumb = `<img class="table__img" src="${escapeHtml(url)}" alt="">`;
+        thumb = `<img class="table__img" src="${escapeHtml(url)}" alt="" style="cursor:pointer;" title="Clique para editar imagem" onclick="editProduct(${p.id})">`;
       } else if (url && p.midias_types[idx >= 0 ? idx : 0] === 'video') {
-        thumb = `<video class="table__img" src="${escapeHtml(url)}" alt="" muted playsinline style="object-fit:cover;width:100%;height:100%;"></video>`;
+        thumb = `<video class="table__img" src="${escapeHtml(url)}" alt="" muted playsinline style="object-fit:cover;width:100%;height:100%;cursor:pointer;" title="Clique para editar" onclick="editProduct(${p.id})"></video>`;
       }
     } else {
-      thumb = '<div class="table__img" style="background:#f0f0f0;"></div>';
+      thumb = `<div class="table__img" style="background:#f0f0f0;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#bbb;" title="Clique para adicionar imagem" onclick="editProduct(${p.id})"><i class="fas fa-image" style="font-size:16px;"></i></div>`;
     }
     return `
     <tr>
@@ -5561,6 +8276,12 @@ function renderProductsTable() {
       <td>
         <label class="switch-label" style="margin:0;">
           <input type="checkbox" ${p.disponivel ? 'checked' : ''} onchange="toggleAvailability(${p.id}, this.checked)">
+          <span class="switch"></span>
+        </label>
+      </td>
+      <td>
+        <label class="switch-label" style="margin:0;">
+          <input type="checkbox" ${p.destaque ? 'checked' : ''} onchange="toggleFeatured(${p.id}, this.checked)">
           <span class="switch"></span>
         </label>
       </td>
@@ -5587,6 +8308,14 @@ window.editProduct = function(id) {
   $('productPreco').value = p.preco;
   $('productOrdem').value = p.ordem || 0;
   $('productDisponivel').checked = p.disponivel;
+  if ($('productDestaque')) $('productDestaque').checked = Boolean(p.destaque);
+  // Preencher dias da semana
+  document.querySelectorAll('.dia-check').forEach(cb => { cb.checked = false; });
+  const dias = Array.isArray(p.dias_disponiveis) ? p.dias_disponiveis : [];
+  dias.forEach(d => {
+    const cb = document.querySelector(`.dia-check[value="${d}"]`);
+    if (cb) cb.checked = true;
+  });
   // Preencher galeria de mídias (robusto para produtos antigos)
   const midiasArr = Array.isArray(p.midias) ? p.midias : (p.midias ? [p.midias] : []);
   const typesArr = Array.isArray(p.midias_types) ? p.midias_types : (p.midias_types ? [p.midias_types] : []);
@@ -5616,6 +8345,24 @@ window.toggleAvailability = async function(id, available) {
   }
 };
 
+window.toggleFeatured = async function(id, featured) {
+  try {
+    const { error } = await sb.from('produtos').update({ destaque: featured }).eq('id', id);
+    if (error) throw error;
+    let order = await loadFeaturedOrderFromConfig();
+    if (featured) {
+      if (!order.includes(id)) order.push(id);
+    } else {
+      order = order.filter(v => v !== id);
+    }
+    await saveFeaturedOrderToConfig(order);
+    await loadProducts();
+  } catch (err) {
+    showToast('Erro ao atualizar destaque', 'error');
+    loadProducts();
+  }
+};
+
 $('productForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const idValue = $('productId').value?.trim();
@@ -5623,6 +8370,7 @@ $('productForm').addEventListener('submit', async (e) => {
   
   if (!nomeProduto) { showToast('Nome do produto é obrigatório', 'error'); return; }
   
+  const diasChecked = [...document.querySelectorAll('.dia-check:checked')].map(cb => parseInt(cb.value));
   const payload = {
     nome: nomeProduto,
     categoria: $('productCategoria').value.trim(),
@@ -5631,21 +8379,40 @@ $('productForm').addEventListener('submit', async (e) => {
     preco: parseFloat($('productPreco').value),
     ordem: parseInt($('productOrdem').value) || 0,
     disponivel: $('productDisponivel').checked,
+    destaque: $('productDestaque')?.checked || false,
     midias: (window.productMidiasState || []).map(m => m.url),
     midias_types: (window.productMidiasState || []).map(m => m.type),
+    dias_disponiveis: diasChecked.length > 0 ? diasChecked : null,
   };
 
   try {
+    let persistedId = null;
     if (idValue && idValue !== '' && !isNaN(idValue)) {
+      persistedId = parseInt(idValue);
       const { error } = await sb.from('produtos').update(payload).eq('id', parseInt(idValue));
       if (error) throw error;
     } else {
-      const { error } = await sb.from('produtos').insert([payload]);
+      const { data: inserted, error } = await sb.from('produtos').insert([payload]).select('id').single();
       if (error) throw error;
+      persistedId = inserted?.id || null;
     }
+
+    if (persistedId) {
+      let order = await loadFeaturedOrderFromConfig();
+      if (payload.destaque) {
+        if (!order.includes(persistedId)) {
+          order.push(persistedId);
+          await saveFeaturedOrderToConfig(order);
+        }
+      } else {
+        const next = order.filter(v => v !== persistedId);
+        if (next.length !== order.length) await saveFeaturedOrderToConfig(next);
+      }
+    }
+
     window.productMidiasState = [];
     $('productFormModal').classList.add('hidden');
-    loadProducts();
+    await loadProducts();
   } catch (err) {
     showToast('Erro ao salvar produto: ' + err.message, 'error');
     console.error('Erro ao salvar:', err);
@@ -5657,18 +8424,30 @@ $('productMidias')?.addEventListener('change', async (e) => {
   const files = Array.from(e.target.files || []);
   for (const file of files) {
     if (!/^image\//.test(file.type) && !/^video\//.test(file.type)) continue;
-    if (file.size > 8 * 1024 * 1024) { showToast('Arquivo muito grande (máx. 8MB)', 'error'); continue; }
-    const ext = (file.name.split('.').pop() || '').toLowerCase();
-    const safeName = (file.name.replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 32));
-    const filePath = `produtos/${Date.now()}-${safeName}.${ext}`;
 
-    const { data, error } = await sb.storage.from('produtos').upload(filePath, file, { cacheControl: '3600', upsert: false });
+    let uploadFile = file;
+    let uploadExt = (file.name.split('.').pop() || '').toLowerCase();
+    let uploadType = file.type.startsWith('video/') ? 'video' : 'image';
+
+    // Imagens passam pelo editor de crop
+    if (/^image\//.test(file.type)) {
+      const croppedBlob = await window.openImageCropModal(file);
+      if (!croppedBlob) continue; // Usuário cancelou
+      uploadFile = croppedBlob;
+      uploadExt = 'jpg';
+      uploadType = 'image';
+    }
+
+    if (uploadFile.size > 8 * 1024 * 1024) { showToast('Arquivo muito grande (máx. 8MB)', 'error'); continue; }
+    const safeName = file.name.replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 32);
+    const filePath = `produtos/${Date.now()}-${safeName}.${uploadExt}`;
+
+    const { data, error } = await sb.storage.from('produtos').upload(filePath, uploadFile, { cacheControl: '3600', upsert: false });
     if (error) { showToast(`Erro ao enviar arquivo: ${error.message}`, 'error'); console.error('Upload error:', error); continue; }
     const { data: publicData } = sb.storage.from('produtos').getPublicUrl(filePath);
     if (!publicData?.publicUrl) { showToast('Erro ao obter URL pública', 'error'); continue; }
     window.productMidiasState = window.productMidiasState || [];
-    window.productMidiasState.push({ url: publicData.publicUrl, type: file.type.startsWith('video/') ? 'video' : 'image' });
-    console.log('Arquivo enviado:', publicData.publicUrl);
+    window.productMidiasState.push({ url: publicData.publicUrl, type: uploadType });
     renderProductMidiasPreview();
   }
   e.target.value = '';
@@ -5687,49 +8466,278 @@ $('productFormModal')?.addEventListener('click', (e) => {
 // ============================================================
 //  CLIENTS
 // ============================================================
+let allClients = [];
+
 async function loadClients() {
   const tbody = $('clientsTableBody');
-  tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;"><i class="fas fa-spinner fa-spin"></i></td></tr>';
+  tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;"><i class="fas fa-spinner fa-spin"></i></td></tr>';
   try {
-    const { data: orders } = await sb.from('pedidos').select('*');
-    if (!orders || !orders.length) {
-      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999;padding:20px;">Nenhum cliente</td></tr>';
-      return;
-    }
-    // Apenas pedidos pagos (confirmado, preparando, saiu, entregue)
+    const now = new Date();
+    const [ordersRes, clientsRes] = await Promise.all([
+      sb.from('pedidos').select('*').order('created_at', { ascending: false }),
+      sb.from('clientes').select('*').order('nome').then(r => r, () => ({ data: [] }))
+    ]);
+    const orders = ordersRes.data || [];
+    const manualClients = (clientsRes && clientsRes.data) ? clientsRes.data : [];
+
     const PAID_STATUSES = ['confirmado', 'preparando', 'saiu', 'entregue'];
     const paidOrders = orders.filter(o => PAID_STATUSES.includes(o.status));
 
-    if (!paidOrders.length) {
-      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999;padding:20px;">Nenhum cliente com pedidos pagos</td></tr>';
-      return;
-    }
-
-    // Group by email
-    const clients = {};
+    // Build client map from orders
+    const clientMap = {};
     paidOrders.forEach(o => {
-      const key = o.email_cliente || o.nome_cliente || 'unknown';
-      if (!clients[key]) clients[key] = { nome: o.nome_cliente, email: o.email_cliente, telefone: o.telefone_cliente, orders: 0, total: 0 };
-      clients[key].orders++;
-      clients[key].total += (o.total || 0);
-      if (!clients[key].nome && o.nome_cliente) clients[key].nome = o.nome_cliente;
-      if (!clients[key].telefone && o.telefone_cliente) clients[key].telefone = o.telefone_cliente;
+      const key = ((o.email_cliente || o.telefone_cliente || o.nome_cliente) || '').toLowerCase().trim();
+      if (!key) return;
+      if (!clientMap[key]) {
+        clientMap[key] = { nome: o.nome_cliente || 'N/A', email: o.email_cliente || '', telefone: o.telefone_cliente || '', notas: '', endereco: '', manualId: null, orders: [] };
+      }
+      clientMap[key].orders.push(o);
+      if (!clientMap[key].nome || clientMap[key].nome === 'N/A') clientMap[key].nome = o.nome_cliente || 'N/A';
+      if (!clientMap[key].email && o.email_cliente) clientMap[key].email = o.email_cliente;
+      if (!clientMap[key].telefone && o.telefone_cliente) clientMap[key].telefone = o.telefone_cliente;
     });
 
-    const sorted = Object.values(clients).sort((a, b) => b.total - a.total);
-    tbody.innerHTML = sorted.map(c => `
-      <tr>
-        <td><strong>${escapeHtml(c.nome || 'N/A')}</strong></td>
-        <td>${escapeHtml(c.email || 'N/A')}</td>
-        <td>${escapeHtml(c.telefone || 'N/A')}</td>
-        <td>${c.orders}</td>
-        <td><strong>${formatMoney(c.total)}</strong></td>
-      </tr>
-    `).join('');
+    // Merge manual clients (may link with order data by email or phone)
+    manualClients.forEach(c => {
+      const key = (c.email || c.telefone || '').toLowerCase().trim();
+      if (key && clientMap[key]) {
+        clientMap[key].manualId = c.id;
+        clientMap[key].nome = c.nome;
+        if (c.email) clientMap[key].email = c.email;
+        if (c.telefone) clientMap[key].telefone = c.telefone;
+        clientMap[key].notas = c.notas || '';
+        clientMap[key].endereco = c.endereco || '';
+      } else {
+        const newKey = key || c.id;
+        clientMap[newKey] = { manualId: c.id, nome: c.nome, email: c.email || '', telefone: c.telefone || '', notas: c.notas || '', endereco: c.endereco || '', orders: [] };
+      }
+    });
+
+    allClients = Object.values(clientMap).map(c => {
+      const totalSpent = c.orders.reduce((s, o) => s + (o.total || 0), 0);
+      const lastOrder = c.orders[0];
+      const lastDate = lastOrder ? new Date(lastOrder.created_at) : null;
+      const daysSince = lastDate ? Math.floor((now - lastDate) / 86400000) : null;
+      return { ...c, totalSpent, totalOrders: c.orders.length, lastDate, daysSince };
+    }).sort((a, b) => {
+      if (!a.lastDate && !b.lastDate) return a.nome.localeCompare(b.nome);
+      if (!a.lastDate) return 1;
+      if (!b.lastDate) return -1;
+      return b.lastDate - a.lastDate;
+    });
+
+    renderClientsTable(allClients);
   } catch (err) {
     console.error('Clients error:', err);
+    $('clientsTableBody').innerHTML = `<tr><td colspan="7" style="text-align:center;color:#c00;padding:16px;">${escapeHtml(err.message)}</td></tr>`;
   }
 }
+
+window.renderClientsTable = function(clients) {
+  const tbody = $('clientsTableBody');
+  const search = ($('filterClients')?.value || '').toLowerCase().trim();
+  const filtered = search ? clients.filter(c =>
+    c.nome.toLowerCase().includes(search) ||
+    c.email.toLowerCase().includes(search) ||
+    c.telefone.includes(search)
+  ) : clients;
+
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;padding:24px;">Nenhum cliente encontrado</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(c => {
+    const days = c.daysSince;
+    let daysBadge;
+    if (days === null) {
+      daysBadge = '<span class="client-badge client-badge--gray">Nunca comprou</span>';
+    } else if (days <= 7) {
+      daysBadge = `<span class="client-badge client-badge--green">${days}d atrás</span>`;
+    } else if (days <= 30) {
+      daysBadge = `<span class="client-badge client-badge--yellow">${days}d atrás</span>`;
+    } else {
+      daysBadge = `<span class="client-badge client-badge--red">${days}d atrás</span>`;
+    }
+    const lastDateStr = c.lastDate ? c.lastDate.toLocaleDateString('pt-BR') : '—';
+    const clientKey = JSON.stringify(c.email || c.telefone || c.nome).replace(/"/g, '&quot;');
+    const manualIdJs = c.manualId ? JSON.stringify(c.manualId).replace(/"/g, '&quot;') : 'null';
+    return `
+    <tr class="client-row" onclick="viewClientDetail(${manualIdJs},${clientKey})" style="cursor:pointer;">
+      <td data-label="Nome"><strong>${escapeHtml(c.nome)}</strong>${c.manualId ? '' : ''}</td>
+      <td data-label="Telefone">${escapeHtml(c.telefone || '—')}</td>
+      <td data-label="Última Compra">${lastDateStr}</td>
+      <td data-label="Tempo">${daysBadge}</td>
+      <td data-label="Pedidos">${c.totalOrders}</td>
+      <td data-label="Total" data-avg="${escapeHtml(formatMoney(c.totalOrders > 0 ? c.totalSpent / c.totalOrders : 0))}"><strong>${formatMoney(c.totalSpent)}</strong></td>
+      <td data-label="Ver"><button class="btn btn--outline-sm btn--sm" onclick="event.stopPropagation();viewClientDetail(${manualIdJs},${clientKey})"><i class="fas fa-eye"></i></button></td>
+    </tr>`;
+  }).join('');
+};
+
+window.viewClientDetail = function(manualId, key) {
+  const c = allClients.find(cl =>
+    (manualId && cl.manualId === manualId) ||
+    cl.email === key || cl.telefone === key || cl.nome === key
+  );
+  if (!c) return;
+
+  const modal = $('clientDetailModal');
+  if (!modal) return;
+
+  $('clientDetailName').textContent = c.nome;
+  $('clientDetailEmail').textContent = c.email || 'N/A';
+  $('clientDetailPhone').textContent = c.telefone || 'N/A';
+  $('clientDetailAddress').textContent = c.endereco || 'N/A';
+  $('clientDetailOrders').textContent = c.totalOrders;
+  $('clientDetailTotal').textContent = formatMoney(c.totalSpent);
+  const avg = c.totalOrders > 0 ? c.totalSpent / c.totalOrders : 0;
+  $('clientDetailAvg').textContent = formatMoney(avg);
+  $('clientDetailLast').textContent = c.lastDate ? c.lastDate.toLocaleDateString('pt-BR') : 'Nunca';
+  $('clientDetailDays').textContent = c.daysSince !== null ? `${c.daysSince} dias` : '—';
+
+  const notesEl = $('clientDetailNotes');
+  if (notesEl) {
+    notesEl.value = c.notas || '';
+    notesEl.dataset.original = c.notas || '';
+  }
+  const btnSaveNotes = $('btnSaveNotes');
+  if (btnSaveNotes) btnSaveNotes.style.display = 'none';
+
+  // Show/hide edit and notes buttons based on whether client is in manual table
+  $('btnEditClientDetail').style.display = c.manualId ? '' : 'none';
+  $('clientDetailNotesGroup').style.display = c.manualId ? '' : 'none';
+
+  // Order history
+  const historyEl = $('clientDetailHistory');
+  const sorted = [...c.orders].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 15);
+  historyEl.innerHTML = sorted.length ? sorted.map(o => {
+    const date = new Date(o.created_at).toLocaleDateString('pt-BR');
+    const time = new Date(o.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const items = Array.isArray(o.itens) ? o.itens.slice(0, 4).map(i => `${i.nome} x${i.quantidade}`).join(', ') : 'Itens não disponíveis';
+    const extra = Array.isArray(o.itens) && o.itens.length > 4 ? ` +${o.itens.length - 4} mais` : '';
+    return `<div class="client-order-row">
+      <div class="client-order-row__meta">
+        <span class="client-order-row__date">${date} ${time}</span>
+        <span class="order-status-badge order-status-badge--${escapeHtml(o.status || '')}">${escapeHtml(o.status || '')}</span>
+      </div>
+      <div class="client-order-row__items">${escapeHtml(items)}${escapeHtml(extra)}</div>
+      <div class="client-order-row__total">${formatMoney(o.total)}</div>
+    </div>`;
+  }).join('') : '<p style="color:#aaa;text-align:center;padding:16px;font-size:.87rem;">Nenhum pedido registrado</p>';
+
+  modal.dataset.clientKey = key;
+  modal.dataset.manualId = manualId || '';
+  modal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+};
+
+window.closeClientDetail = function() {
+  $('clientDetailModal')?.classList.add('hidden');
+  document.body.style.overflow = '';
+};
+
+window.editClientFromDetail = function() {
+  const modal = $('clientDetailModal');
+  const id = modal?.dataset.manualId;
+  if (!id) return;
+  closeClientDetail();
+  openClientForm(id);
+};
+
+window.markClientNotesDirty = function() {
+  const el = $('clientDetailNotes');
+  const btn = $('btnSaveNotes');
+  if (el && btn) btn.style.display = el.value !== (el.dataset.original || '') ? '' : 'none';
+};
+
+window.saveClientNotes = async function() {
+  const modal = $('clientDetailModal');
+  const id = modal?.dataset.manualId;
+  if (!id) return;
+  const notas = $('clientDetailNotes')?.value.trim() || '';
+  try {
+    const { error } = await sb.from('clientes').update({ notas, updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) throw error;
+    $('clientDetailNotes').dataset.original = notas;
+    $('btnSaveNotes').style.display = 'none';
+    showToast('Observações salvas!', 'success');
+    await loadClients();
+  } catch (err) {
+    showToast('Erro: ' + err.message, 'error');
+  }
+};
+
+window.openClientForm = function(id = null) {
+  const modal = $('clientFormModal');
+  $('clientFormTitle').textContent = id ? 'Editar Cliente' : 'Novo Cliente';
+  $('clientFormId').value = id || '';
+  if (id) {
+    const c = allClients.find(cl => cl.manualId === id);
+    if (!c) return;
+    $('clientFormNome').value = c.nome;
+    $('clientFormEmail').value = c.email || '';
+    $('clientFormTelefone').value = c.telefone || '';
+    $('clientFormEndereco').value = c.endereco || '';
+    $('clientFormNotas').value = c.notas || '';
+  } else {
+    $('clientFormNome').value = '';
+    $('clientFormEmail').value = '';
+    $('clientFormTelefone').value = '';
+    $('clientFormEndereco').value = '';
+    $('clientFormNotas').value = '';
+  }
+  modal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => $('clientFormNome')?.focus(), 80);
+};
+
+window.closeClientForm = function() {
+  $('clientFormModal')?.classList.add('hidden');
+  document.body.style.overflow = '';
+};
+
+window.saveClient = async function() {
+  const id = $('clientFormId').value;
+  const nome = $('clientFormNome').value.trim();
+  const email = $('clientFormEmail').value.trim();
+  const telefone = $('clientFormTelefone').value.trim();
+  const endereco = $('clientFormEndereco').value.trim();
+  const notas = $('clientFormNotas').value.trim();
+  if (!nome) { showToast('Nome é obrigatório', 'error'); $('clientFormNome')?.focus(); return; }
+  const payload = { nome, email: email || null, telefone: telefone || null, endereco: endereco || null, notas: notas || null, updated_at: new Date().toISOString() };
+  try {
+    if (id) {
+      const { error } = await sb.from('clientes').update(payload).eq('id', id);
+      if (error) throw error;
+      showToast('Cliente atualizado!', 'success');
+    } else {
+      const { error } = await sb.from('clientes').insert(payload);
+      if (error) throw error;
+      showToast('Cliente criado!', 'success');
+    }
+    closeClientForm();
+    await loadClients();
+  } catch (err) {
+    showToast('Erro: ' + err.message, 'error');
+  }
+};
+
+window.deleteClientRecord = async function(id) {
+  const ok = await showCatConfirmModal({ title: 'Excluir Cliente', message: 'Excluir este cadastro? Os pedidos não serão afetados.', confirmLabel: 'Excluir' });
+  if (!ok) return;
+  try {
+    const { error } = await sb.from('clientes').delete().eq('id', id);
+    if (error) throw error;
+    showToast('Cadastro excluído', 'success');
+    closeClientDetail();
+    await loadClients();
+  } catch (err) {
+    showToast('Erro: ' + err.message, 'error');
+  }
+};
+
+
 
 // ============================================================
 //  DELIVERY ZONES
@@ -6514,6 +9522,15 @@ const configSections = {
       'delivery_time_max',
       'min_order'
     ]
+  },
+  notificacoes: {
+    icon: 'fa-bell',
+    title: 'Notificações',
+    desc: 'Configurações de som para alertas de novos pedidos',
+    keys: [
+      'admin_new_order_sound_type',
+      'admin_new_order_sound_volume'
+    ]
   }
 };
 
@@ -6538,7 +9555,9 @@ const configDefaults = {
   schedule_message_closed: 'Fechado no momento',
   delivery_time: '40',
   delivery_time_max: '60',
-  min_order: '25'
+  min_order: '25',
+  admin_new_order_sound_type: 'ping',
+  admin_new_order_sound_volume: '1.0'
 };
 
 function getConfigSectionByKey(key) {
@@ -6827,11 +9846,37 @@ function renderConfigSection(section) {
       inputEl = document.createElement('input');
       inputEl.type = 'color';
       inputEl.value = val || '#000000';
-    } else if (type === 'number') {
+    } else if (key === 'admin_new_order_sound_type') {
+      inputEl = document.createElement('select');
+      const soundOptions = ['ping', 'double', 'triple', 'chime', 'bell', 'alert', 'swoop', 'spark', 'ding', 'tone'];
+      const soundLabels = {
+        ping: 'Ping',
+        double: 'Duplo',
+        triple: 'Triplo',
+        chime: 'Sino',
+        bell: 'Campainha',
+        alert: 'Alerta',
+        swoop: 'Swoop',
+        spark: 'Faísca',
+        ding: 'Ding',
+        tone: 'Tom'
+      };
+      soundOptions.forEach(option => {
+        const opt = document.createElement('option');
+        opt.value = option;
+        opt.textContent = soundLabels[option] || option.charAt(0).toUpperCase() + option.slice(1);
+        if (option === String(val).toLowerCase()) opt.selected = true;
+        inputEl.appendChild(opt);
+      });
+    } else if (type === 'number' || key === 'admin_new_order_sound_volume') {
       inputEl = document.createElement('input');
       inputEl.type = 'number';
       inputEl.value = val;
-      inputEl.step = '0.01';
+      inputEl.step = '0.05';
+      if (key === 'admin_new_order_sound_volume') {
+        inputEl.min = '0.1';
+        inputEl.max = '1.0';
+      }
     } else if (type === 'url' || key.includes('url') || key.includes('link') || key.includes('embed')) {
       inputEl = document.createElement('input');
       inputEl.type = 'url';
@@ -6897,6 +9942,8 @@ function renderConfigSection(section) {
       'primary_color': 'Cor principal do site (tema)',
       'accent_color': 'Cor de destaque/botões',
       'monday_hours': 'Formato: 09:00 - 23:00 ou "Fechado"',
+      'admin_new_order_sound_type': 'Tipo de som ao receber novo pedido',
+      'admin_new_order_sound_volume': 'Volume do alerta de novo pedido',
         'sales_open_days': 'Dias que aceita pedidos. Use: 0=Dom,1=Seg,2=Ter... Ex.: 0,2,3,4,5,6',
         'lunch_open_days': 'Dias com almoço (0=Dom...6=Sáb). Ex.: 2,3,4,5,6,0',
         'lunch_start': 'Início do almoço (HH:MM), ex.: 11:00',
@@ -6925,6 +9972,42 @@ function renderConfigSection(section) {
   });
 
   form.appendChild(card);
+
+  if (section === 'notificacoes') {
+    const actionRow = document.createElement('div');
+    actionRow.className = 'config-field';
+    actionRow.style.marginTop = '14px';
+    actionRow.style.display = 'flex';
+    actionRow.style.alignItems = 'center';
+    actionRow.style.gap = '12px';
+
+    const testButton = document.createElement('button');
+    testButton.type = 'button';
+    testButton.textContent = 'Testar som';
+    testButton.style.padding = '11px 16px';
+    testButton.style.borderRadius = '12px';
+    testButton.style.background = 'var(--gold)';
+    testButton.style.color = 'white';
+    testButton.style.fontWeight = '700';
+    testButton.style.cursor = 'pointer';
+    testButton.onclick = () => {
+      try {
+        playNewOrderSound();
+        if (typeof showToast === 'function') showToast('Som de teste reproduzido!', 'success');
+      } catch (error) {
+        console.warn('[Config] teste de som falhou', error);
+        if (typeof showToast === 'function') showToast('Não foi possível reproduzir o som de teste.', 'error');
+      }
+    };
+
+    const testHint = document.createElement('span');
+    testHint.className = 'config-field-hint';
+    testHint.textContent = 'Clique para ouvir o som configurado de novo pedido.';
+
+    actionRow.appendChild(testButton);
+    actionRow.appendChild(testHint);
+    form.appendChild(actionRow);
+  }
 }
 
 function switchConfigSection(section) {
@@ -6935,6 +10018,7 @@ function switchConfigSection(section) {
 }
 
 function inferConfigType(key, val) {
+  if (key === 'admin_new_order_sound_volume') return 'number';
   if (key.includes('fee') || key.includes('price') || key.includes('time') || key.includes('discount')) return 'number';
   if (key.includes('url') || key.includes('link') || key.includes('embed')) return 'url';
   if (key === 'email') return 'email';
@@ -6980,6 +10064,8 @@ function formatConfigLabel(key) {
     'delivery_time': 'Tempo Entrega (min)',
     'delivery_time_max': 'Tempo Máximo Entrega (min)',
     'delivery_zones_info': 'Informações Zonas de Entrega',
+    'admin_new_order_sound_type': 'Tipo de Som do Pedido Novo',
+    'admin_new_order_sound_volume': 'Volume do Alerta de Pedido Novo',
     'delivery_schedule': 'Horário Entrega',
     'payment_methods_available': 'Métodos Disponíveis',
     'accepts_cash': 'Aceita Dinheiro',
@@ -7100,7 +10186,7 @@ $('btnSaveConfig').addEventListener('click', async () => {
       }
     });
 
-    statusEl.textContent = '✓ Configurações salvas com sucesso!';
+    statusEl.textContent = '? Configurações salvas com sucesso!';
     statusEl.classList.remove('hidden', 'error');
   } catch (err) {
     console.error('Save error:', err);

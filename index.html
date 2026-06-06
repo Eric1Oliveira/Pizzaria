@@ -65,8 +65,25 @@
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Montserrat:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <!-- Leaflet CSS (admin map) - carregado aqui para evitar FOUC no admin -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="style.css?v=20260430-02">
+  <link rel="stylesheet" href="style.css?v=20260522-05">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    // Supress specific parse errors injected by Chrome extensions
+    window.addEventListener('error', function (e) {
+      try {
+        var src = e.filename || (e && e.error && e.error.fileName) || '';
+        var msg = (e && e.message) || (e && e.error && e.error.message) || '';
+        if (typeof src === 'string' && src.indexOf('chrome-extension://') === 0) {
+          if (typeof msg === 'string' && msg.indexOf('Cannot use import statement outside a module') !== -1) {
+            e.preventDefault();
+            console.debug('[Suppressed extension parse error]', src);
+          }
+        }
+      } catch (err) {
+        // ignore
+      }
+    }, true);
+  </script>
 </head>
 <body>
 
@@ -178,6 +195,25 @@
     </div>
   </div>
 
+  <!-- Featured Highlights Carousel -->
+  <section class="featured hidden" id="featuredSection" aria-label="Destaques do cardápio">
+    <div class="featured__container">
+      <h2 class="section-title"><i class="fas fa-star"></i>Destaques da casa</h2>
+      <div class="featured-carousel" id="featuredCarousel" role="region" aria-roledescription="carousel" aria-label="Produtos em destaque">
+        <button class="featured__nav featured__nav--prev" id="featuredPrev" aria-label="Destaque anterior" type="button">
+          <i class="fas fa-chevron-left"></i>
+        </button>
+        <div class="featured-carousel__viewport">
+          <div class="featured-carousel__track" id="featuredTrack"></div>
+        </div>
+        <button class="featured__nav featured__nav--next" id="featuredNext" aria-label="Próximo destaque" type="button">
+          <i class="fas fa-chevron-right"></i>
+        </button>
+      </div>
+      <div class="featured__dots" id="featuredDots" aria-label="Navegação dos destaques"></div>
+    </div>
+  </section>
+
   <!-- Category tabs -->
   <nav class="cat-nav" id="catNav">
     <div class="cat-nav__container">
@@ -251,6 +287,44 @@
       <div class="cart__delivery-opts">
         <button class="delivery-opt active" data-tipo="delivery"><i class="fas fa-motorcycle"></i> Delivery</button>
         <button class="delivery-opt" data-tipo="retirada"><i class="fas fa-store"></i> Retirada</button>
+        <button class="delivery-opt" data-tipo="domo_home"><i class="fas fa-building"></i> Domo Home</button>
+      </div>
+      <!-- DOMO HOME: sub-opções de entrega especial -->
+      <div class="cart__domo-section hidden" id="domoHomeSection">
+        <p class="cart__domo-label"><i class="fas fa-info-circle"></i> Selecione o tipo de entrega no Domo Home:</p>
+        <div class="cart__domo-opts">
+          <button class="domo-opt active" data-domo="padaria">
+            <i class="fas fa-store-alt"></i>
+            <span class="domo-opt__text">Padaria <small>(manhã)</small></span>
+            <span class="domo-opt__fee">Grátis</span>
+          </button>
+          <button class="domo-opt" data-domo="porta">
+            <i class="fas fa-door-open"></i>
+            <span class="domo-opt__text">Porta do cliente <small>(noite)</small></span>
+            <span class="domo-opt__fee">R$ 10,00</span>
+          </button>
+        </div>
+        <div class="cart__address-row hidden" id="domoPortaSection" style="padding: 0 14px 8px;flex-direction:column;">
+          <div style="display:flex;gap:8px;">
+            <div class="addr-field" style="flex:1;">
+              <label for="domoBloco">Bloco / Torre</label>
+              <input type="text" id="domoBloco" placeholder="Ex: Bloco B" autocomplete="off">
+            </div>
+            <div class="addr-field" style="flex:1;">
+              <label for="domoNumApto">Apartamento <span style="color:#E53935;">*</span></label>
+              <input type="text" id="domoNumApto" placeholder="Ex: 204" inputmode="numeric" autocomplete="off">
+            </div>
+          </div>
+        </div>
+        <!-- Agendamento: aparece para TODOS os modos Domo Home -->
+        <div class="addr-field" style="padding: 0 14px 10px;" id="domoAgendSection">
+          <label for="domoAgend">
+            <i class="fas fa-clock" style="color:var(--gold);"></i>
+            Agendar horário de recebimento
+            <span style="font-size:.8em;color:var(--gold);">(mínimo 40 min)</span>
+          </label>
+          <input type="time" id="domoAgend" class="domo-agend-input">
+        </div>
       </div>
       <div class="cart__address" id="addressSection">
         <div class="addr-cep-wrap">
@@ -287,13 +361,6 @@
           <span>Salvar endereço para próximos pedidos</span>
         </label>
       </div>
-      <!-- CPF always visible regardless of delivery type -->
-      <div class="cart__address-row" style="margin-top:10px;">
-        <div class="addr-field">
-          <label for="addrCpf">CPF <span class="addr-optional">(obrigatório)</span></label>
-          <input type="text" id="addrCpf" placeholder="000.000.000-00" maxlength="14" inputmode="numeric" autocomplete="off" required>
-        </div>
-      </div>
     </div>
 
     <!-- STEP 3 · Pagamento -->
@@ -307,6 +374,13 @@
         <button class="payment-opt" data-tipo="na_entrega"><i class="fas fa-hand-holding-usd"></i> Na entrega</button>
       </div>
       <div class="cart__payment-online" id="paymentOnlineSection">
+        <span class="cart__payment-subtitle">Como deseja pagar?</span>
+        <div class="cart__payment-online-opts">
+          <button type="button" class="payment-online-opt active" data-metodo="credito"><i class="fas fa-credit-card"></i> Crédito</button>
+          <button type="button" class="payment-online-opt" data-metodo="debito"><i class="fas fa-credit-card"></i> Débito</button>
+          <button type="button" class="payment-online-opt" data-metodo="pix"><i class="fas fa-qrcode"></i> Pix</button>
+        </div>
+        <div id="paymentOnlineCardSection">
         <span class="cart__payment-subtitle">Dados do cartão</span>
         <!-- Cartão salvo -->
         <div class="saved-card-box hidden" id="savedCardBox">
@@ -351,6 +425,10 @@
               <input type="checkbox" id="chkSaveCard"> Salvar cartão para próximas compras
             </label>
           </div>
+        </div>
+        </div>
+        <div id="paymentOnlinePixSection" class="payment-online-pix hidden">
+          <p class="payment-online-pix__hint"><i class="fas fa-info-circle"></i> Ao finalizar, exibimos o QR Code Pix para você pagar na hora pelo app do banco.</p>
         </div>
       </div>
       <div class="cart__payment-delivery hidden" id="paymentDeliverySection">
@@ -659,6 +737,7 @@
 
       <span class="admin-sidebar__nav-label">Sistema</span>
       <button class="nav-item" data-page="config" data-label="Configurações"><i class="fas fa-cog"></i><span>Configurações</span></button>
+      <button class="nav-item" data-page="print-layout" data-label="Impressão"><i class="fas fa-print"></i><span>Impressão</span></button>
     </nav>
 
     <div class="admin-sidebar__footer">
@@ -858,7 +937,112 @@
           </div>
           <i class="fas fa-chevron-right quick-action-card__arrow"></i>
         </button>
+        <button type="button" class="quick-action-card" id="btnEditPrintLayout" data-admin-page-target="print-layout" onclick="openPrintLayoutEditor()">
+          <div class="quick-action-card__icon" style="background:rgba(33,150,243,.08);color:#1976D2;"><i class="fas fa-print"></i></div>
+          <div class="quick-action-card__text">
+            <strong>Editar Layout de Impressão</strong>
+            <span>Modelos de comanda e nota — visual e fácil</span>
+          </div>
+          <i class="fas fa-chevron-right quick-action-card__arrow"></i>
+        </button>
       </div>
+    </div>
+
+    <!-- ====== IMPRESSÃO PAGE ====== -->
+    <div class="page" id="pagePrintLayout">
+      <div class="page__toolbar">
+        <div class="page__toolbar-copy">
+          <h3><i class="fas fa-print"></i> Central de Impressão</h3>
+          <p>Configure impressoras, impressão automática e edite o cupom clicando nas linhas — igual ao layout que o cliente já usa.</p>
+        </div>
+        <div class="page__toolbar-actions">
+          <button class="btn btn--outline-sm" type="button" id="btnPrintStudioTest"><i class="fas fa-print"></i> Imprimir teste</button>
+          <button class="btn btn--outline-sm" type="button" id="btnPrintStudioReset"><i class="fas fa-undo"></i> Restaurar layout</button>
+          <button class="btn btn--primary" type="button" onclick="savePrinterNames()"><i class="fas fa-save"></i> Salvar tudo</button>
+        </div>
+      </div>
+
+      <div class="print-studio">
+        <aside class="print-studio__sidebar">
+          <section class="print-studio__card">
+            <h4><i class="fas fa-bolt"></i> Impressão automática</h4>
+            <label class="print-studio__auto-toggle">
+              <input type="checkbox" id="printAutoPrintToggle">
+              <span class="print-studio__auto-switch"></span>
+              <span class="print-studio__auto-label">
+                <strong>Imprimir ao receber pedido</strong>
+                <small id="printAutoPrintHint">Desligado: impressão só manual.</small>
+              </span>
+            </label>
+            <div class="print-studio__auto-opts">
+              <label class="switch-label"><input type="checkbox" id="printOptKitchenStudio" checked><span class="switch"></span> Comanda cozinha</label>
+              <label class="switch-label"><input type="checkbox" id="printOptBillStudio" checked><span class="switch"></span> Nota / entrega</label>
+            </div>
+          </section>
+
+          <section class="print-studio__card">
+            <h4><i class="fas fa-print"></i> Impressoras</h4>
+            <p class="print-studio__hint">Use o padrão do Windows ou informe o nome exato da impressora térmica (como aparece em Dispositivos e impressoras).</p>
+            <div class="print-studio__printer-block">
+              <span class="print-studio__printer-label"><i class="fas fa-fire"></i> Cozinha</span>
+              <label class="print-studio__radio"><input type="radio" name="kitchenPrinterMode" id="printKitchenUseWindows" checked> Padrão do Windows</label>
+              <label class="print-studio__radio"><input type="radio" name="kitchenPrinterMode" id="printKitchenUseNamed"> Impressora específica</label>
+              <div id="printKitchenNamedRow" class="print-studio__named-row hidden">
+                <input type="text" id="printerNameKitchen" class="printer-cfg-modal__input" placeholder="Ex: Epson TM-T20" list="printerSuggestions" autocomplete="off">
+                <div id="chipsKitchen" class="printer-cfg-modal__chips"></div>
+              </div>
+            </div>
+            <div class="print-studio__printer-block">
+              <span class="print-studio__printer-label"><i class="fas fa-receipt"></i> Nota / entrega</span>
+              <label class="print-studio__radio"><input type="radio" name="billPrinterMode" id="printBillUseWindows" checked> Padrão do Windows</label>
+              <label class="print-studio__radio"><input type="radio" name="billPrinterMode" id="printBillUseNamed"> Impressora específica</label>
+              <div id="printBillNamedRow" class="print-studio__named-row hidden">
+                <input type="text" id="printerNameBill" class="printer-cfg-modal__input" placeholder="Ex: Epson TM-T20" list="printerSuggestions" autocomplete="off">
+                <div id="chipsBill" class="printer-cfg-modal__chips"></div>
+              </div>
+            </div>
+            <a class="printer-cfg-modal__win-btn" href="ms-settings:printers" target="_blank" rel="noopener"><i class="fab fa-windows"></i> Abrir impressoras do Windows</a>
+          </section>
+
+          <section class="print-studio__card print-studio__card--inspector">
+            <h4><i class="fas fa-edit"></i> Editar linha</h4>
+            <p id="printEditorDocHint" class="print-studio__hint">Cupom de entrega — layout padrão do cliente.</p>
+            <div id="printBlockInspector" class="print-block-inspector"></div>
+            <div id="printBlockList" class="print-block-list"></div>
+          </section>
+        </aside>
+
+        <div class="print-studio__workspace">
+          <div class="print-studio__tabs">
+            <button type="button" class="btn btn--outline-sm is-active" data-print-doc="bill"><i class="fas fa-receipt"></i> Nota / Entrega</button>
+            <button type="button" class="btn btn--outline-sm" data-print-doc="kitchen"><i class="fas fa-fire"></i> Cozinha</button>
+          </div>
+          <div class="print-studio__workspace-grid">
+            <div class="print-studio__canvas-wrap">
+              <div class="print-studio__canvas-title">Clique em qualquer texto do cupom para editar</div>
+              <div class="print-studio__canvas">
+                <div id="receiptEditorPreview" class="receipt-paper"></div>
+              </div>
+            </div>
+            <aside class="print-studio__preview-side">
+              <div class="card">
+                <div class="card__header"><h3>Prévia de impressão</h3></div>
+                <div class="card__body card__body--padded">
+                  <iframe id="printerPreviewFrame" class="print-studio__iframe" title="Prévia cupom"></iframe>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+
+      <datalist id="printerSuggestions">
+        <option value="Epson TM-T20X"><option value="Epson TM-T20III"><option value="Epson TM-T88VII">
+        <option value="Bematech MP-4200 TH"><option value="Elgin i9 Full"><option value="Daruma DR800 L">
+        <option value="Microsoft Print to PDF">
+      </datalist>
+
+      <input type="hidden" id="printLayoutStyle" value="classic">
     </div>
 
     <!-- ====== PEDIDOS PAGE ====== -->
@@ -866,15 +1050,6 @@
       <div class="page__toolbar">
         <button class="btn btn--primary" id="btnNewTableOrder"><i class="fas fa-plus-circle"></i> Novo Pedido Mesa</button>
         <div class="filter-group">
-          <select id="filterStatus">
-            <option value="">Todos os Status</option>
-            <option value="pendente">Pendente</option>
-            <option value="confirmado">Confirmado</option>
-            <option value="preparando">Preparando</option>
-            <option value="saiu_entrega">Saiu p/ Entrega</option>
-            <option value="entregue">Entregue</option>
-            <option value="cancelado">Cancelado</option>
-          </select>
           <input type="date" id="filterDate">
         </div>
         <div class="page__toolbar-actions">
@@ -882,10 +1057,58 @@
           <button class="btn btn--outline-sm" id="btnExportCSV" title="Exportar pedidos como CSV"><i class="fas fa-file-csv"></i> Exportar CSV</button>
         </div>
       </div>
+
+      <!-- Barra de controle de impressão -->
+      <div class="print-bar" id="printBar">
+        <button class="print-bar__toggle" id="btnAutoPrint" onclick="toggleAutoPrint()" title="Quando ON: todo novo pedido recebido imprime automaticamente">
+          <i class="fas fa-print"></i>
+          <span>Impr. automática ao receber:</span>
+          <span class="print-bar__status" id="autoPrintStatus">OFF</span>
+        </button>
+        <div class="print-bar__opts" id="printBarOpts" style="display:none;">
+          <label class="print-bar__opt" title="Imprimir comanda para a cozinha">
+            <input type="checkbox" id="printOptKitchen" onchange="savePrintOpt()" checked>
+            <i class="fas fa-fire"></i> Cozinha
+          </label>
+          <label class="print-bar__opt" title="Imprimir nota mesa (cupom não-fiscal)">
+            <input type="checkbox" id="printOptBill" onchange="savePrintOpt()" checked>
+            <i class="fas fa-receipt"></i> Nota Mesa
+          </label>
+        </div>
+        <button class="print-bar__cfg-btn" id="btnPrinterConfig" onclick="openPrinterConfig()" title="Configurar impressoras">
+          <i class="fas fa-cog"></i> Impressoras
+        </button>
+      </div>
+
+      <div class="orders-tabs" id="ordersTabs">
+        <button class="orders-tab orders-tab--active" data-tab="ativos" onclick="setOrdersTab('ativos')">Ativos <span class="orders-tab__badge" id="tabCountAtivos"></span></button>
+        <button class="orders-tab" data-tab="entregues" onclick="setOrdersTab('entregues')">Entregues <span class="orders-tab__badge" id="tabCountEntregues"></span></button>
+        <button class="orders-tab" data-tab="cancelados" onclick="setOrdersTab('cancelados')">Cancelados <span class="orders-tab__badge" id="tabCountCancelados"></span></button>
+        <button class="orders-tab" data-tab="todos" onclick="setOrdersTab('todos')">Todos <span class="orders-tab__badge" id="tabCountTodos"></span></button>
+      </div>
+
+      <div class="orders-bulk-bar" id="ordersBulkBar">
+        <button class="btn btn--outline-sm btn--sm" id="btnSelectAll" onclick="clickSelectAllBtn()"><i class="fas fa-check-square"></i> <span id="btnSelectAllLabel">Selecionar todos</span></button>
+        <span class="orders-bulk-bar__controls" id="bulkControls" style="display:none">
+          <span class="orders-bulk-bar__info"><strong id="bulkSelectedCount">0</strong> sel.</span>
+          <select id="bulkStatusSelect" class="orders-bulk-bar__select">
+            <option value="">Novo status...</option>
+            <option value="confirmado">Confirmado</option>
+            <option value="preparando">Preparando</option>
+            <option value="saiu_entrega">Saiu p/ Entrega</option>
+            <option value="aguardando_pagamento">Cobrar Pagamento</option>
+            <option value="entregue">Entregue</option>
+            <option value="cancelado">Cancelado</option>
+          </select>
+          <button class="btn btn--primary btn--sm" onclick="applyBulkStatus()"><i class="fas fa-check-double"></i> Aplicar</button>
+          <button class="btn btn--outline-sm btn--sm" onclick="clearOrderSelection()">Limpar</button>
+        </span>
+      </div>
+
       <div class="card">
         <div class="card__body">
           <table class="table">
-            <thead><tr><th>#</th><th>Cliente</th><th>Itens</th><th>Total</th><th>Entrega</th><th>Status</th><th>Saipos</th><th>Data</th><th>Tempo</th><th>Ações</th></tr></thead>
+            <thead><tr><th><label class="order-sel-all"><input type="checkbox" id="selectAllOrders" onchange="toggleSelectAllOrders(this.checked)"> #</label></th><th>Cliente</th><th>Itens</th><th>Total</th><th>Entrega</th><th>Status</th><th>Saipos</th><th>Data</th><th>Tempo</th><th>Ações</th></tr></thead>
             <tbody id="ordersTableBody"></tbody>
           </table>
           <div class="empty-state hidden" id="ordersEmpty"><i class="fas fa-inbox"></i><p>Nenhum pedido encontrado</p></div>
@@ -899,6 +1122,7 @@
         <div class="page__toolbar-actions">
           <button class="btn btn--primary" id="btnAddProduct"><i class="fas fa-plus"></i> Novo Produto</button>
           <button class="btn btn--outline-sm" id="btnToggleCatManager"><i class="fas fa-tags"></i> Categorias</button>
+          <button class="btn btn--outline-sm" id="btnToggleFeaturedManager"><i class="fas fa-star"></i> Destaques</button>
         </div>
         <div class="filter-group">
           <select id="filterCategory">
@@ -912,19 +1136,36 @@
         <div class="cat-manager-header">
           <div class="cat-manager-header__left">
             <span class="cat-manager-header__title"><i class="fas fa-layer-group"></i> Categorias e Subcategorias</span>
-            <span class="cat-manager-header__sub">Arraste ou use as setas para reordenar</span>
+            <span class="cat-manager-header__sub">Use as setas para reordenar • Clique na linha ou no lápis para editar</span>
           </div>
           <button class="btn btn--primary btn--gold" id="btnCreateCategory"><i class="fas fa-plus"></i> Nova Categoria</button>
         </div>
-        <div class="cat-manager-hint"><i class="fas fa-info-circle"></i> A ordem aqui define a ordem no menu do app.</div>
         <div class="cat-manager-list" id="catManagerList">
           <div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>Carregando...</p></div>
+        </div>
+      </div>
+      <!-- Featured Manager Panel -->
+      <div class="card featured-manager hidden" id="featuredManagerPanel">
+        <div class="cat-manager-header">
+          <div class="cat-manager-header__left">
+            <span class="cat-manager-header__title"><i class="fas fa-star"></i> Roleta de Destaques</span>
+            <span class="cat-manager-header__sub">Escolha os produtos da roleta e ordene do primeiro ao último slide</span>
+          </div>
+        </div>
+        <div class="featured-manager-toolbar">
+          <select id="featuredProductSelect">
+            <option value="">Selecionar produto para destaque</option>
+          </select>
+          <button class="btn btn--primary btn--sm" id="btnAddFeaturedProduct"><i class="fas fa-plus"></i> Adicionar ao destaque</button>
+        </div>
+        <div class="featured-manager-list" id="featuredManagerList">
+          <div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>Carregando destaques...</p></div>
         </div>
       </div>
       <div class="card">
         <div class="card__body">
           <table class="table">
-            <thead><tr><th>Img</th><th>Nome</th><th>Categoria</th><th>Subcat.</th><th>Preço</th><th>Disponível</th><th>Ações</th></tr></thead>
+            <thead><tr><th>Img</th><th>Nome</th><th>Categoria</th><th>Subcat.</th><th>Preço</th><th>Disponível</th><th>Destaque</th><th>Ações</th></tr></thead>
             <tbody id="productsTableBody"></tbody>
           </table>
         </div>
@@ -933,11 +1174,26 @@
 
     <!-- ====== CLIENTES PAGE ====== -->
     <div class="page" id="pageClientes">
+      <div class="page__toolbar">
+        <div class="page__toolbar-actions">
+          <button class="btn btn--primary" id="btnNewClient" onclick="openClientForm()"><i class="fas fa-user-plus"></i> Novo Cliente</button>
+        </div>
+        <div class="filter-group">
+          <input type="text" id="filterClients" placeholder="Buscar por nome, email ou telefone..." oninput="renderClientsTable(allClients)">
+        </div>
+      </div>
       <div class="card">
-        <div class="card__header"><h3>Clientes</h3></div>
         <div class="card__body">
           <table class="table">
-            <thead><tr><th>Nome</th><th>Email</th><th>Telefone</th><th>Pedidos</th><th>Total Gasto</th></tr></thead>
+            <thead><tr>
+              <th>Nome</th>
+              <th>Telefone</th>
+              <th>Última Compra</th>
+              <th>Tempo</th>
+              <th>Pedidos</th>
+              <th>Total Gasto</th>
+              <th></th>
+            </tr></thead>
             <tbody id="clientsTableBody"></tbody>
           </table>
         </div>
@@ -1087,12 +1343,54 @@
             <input type="checkbox" id="productDisponivel" checked>
             <span class="switch"></span> Disponível
           </label>
+          <label class="switch-label">
+            <input type="checkbox" id="productDestaque">
+            <span class="switch"></span> Destaque na roleta
+          </label>
+        </div>
+        <div class="form-group">
+          <label>Disponibilidade por dia da semana</label>
+          <small class="form-hint" style="display:block;margin-bottom:8px;">Deixe todos desmarcados para disponível todos os dias</small>
+          <div class="dias-semana-grid">
+            <label class="dia-btn"><input type="checkbox" class="dia-check" value="0"><span>Dom</span></label>
+            <label class="dia-btn"><input type="checkbox" class="dia-check" value="1"><span>Seg</span></label>
+            <label class="dia-btn"><input type="checkbox" class="dia-check" value="2"><span>Ter</span></label>
+            <label class="dia-btn"><input type="checkbox" class="dia-check" value="3"><span>Qua</span></label>
+            <label class="dia-btn"><input type="checkbox" class="dia-check" value="4"><span>Qui</span></label>
+            <label class="dia-btn"><input type="checkbox" class="dia-check" value="5"><span>Sex</span></label>
+            <label class="dia-btn"><input type="checkbox" class="dia-check" value="6"><span>Sáb</span></label>
+          </div>
         </div>
         <div class="form-actions">
           <button type="button" class="btn btn--outline-sm" data-close="productFormModal">Cancelar</button>
           <button type="submit" class="btn btn--primary" id="btnSaveProduct">Salvar</button>
         </div>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== IMAGE CROP MODAL ==================== -->
+<div class="modal-overlay hidden" id="imageCropModal" style="z-index:1700;">
+  <div class="modal modal--crop">
+    <div class="modal__header">
+      <h2><i class="fas fa-crop-alt"></i> Ajustar Imagem</h2>
+      <button class="modal__close" id="btnCancelCrop"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <p class="crop-hint">Arraste para reposicionar &bull; Role o mouse ou use o controle abaixo para ampliar</p>
+      <div class="crop-viewport" id="cropViewport">
+        <img id="cropImg" src="" alt="" draggable="false">
+      </div>
+      <div class="crop-controls">
+        <i class="fas fa-search-minus" style="color:#999;"></i>
+        <input type="range" id="cropZoom" min="1" max="5" step="0.01" value="1">
+        <i class="fas fa-search-plus" style="color:#999;"></i>
+      </div>
+    </div>
+    <div class="modal__footer">
+      <button class="btn btn--outline-sm" id="btnCancelCrop2">Cancelar</button>
+      <button class="btn btn--primary" id="btnConfirmCrop"><i class="fas fa-check"></i> Usar esta imagem</button>
     </div>
   </div>
 </div>
@@ -1448,6 +1746,11 @@
           <strong>Configurações</strong>
           <span>Editar site por blocos</span>
         </button>
+        <button class="command-card" data-admin-page-target="print-layout">
+          <i class="fas fa-print"></i>
+          <strong>Layout de Impressão</strong>
+          <span>Configurar nota e comanda</span>
+        </button>
         <button class="command-card" id="cmdDashboardDetails">
           <i class="fas fa-chart-pie"></i>
           <strong>Análises detalhadas</strong>
@@ -1592,6 +1895,25 @@
 </div>
 <div class="toast hidden" id="toast"></div>
 
+<!-- PIX payment overlay -->
+<div class="modal-overlay hidden" id="pixPayOverlay">
+  <div class="modal modal--pix-pay">
+    <div class="modal__header">
+      <h2><i class="fas fa-qrcode"></i> Pague com Pix</h2>
+      <button type="button" class="modal__close" id="btnPixPayClose" aria-label="Fechar"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body modal__body--pix">
+      <p class="pix-pay-total" id="pixPayTotal"></p>
+      <div class="pix-pay-qr-wrap">
+        <img id="pixQrImage" class="pix-pay-qr" alt="QR Code Pix" width="220" height="220">
+      </div>
+      <p class="pix-pay-status" id="pixPayStatus"><i class="fas fa-spinner fa-spin"></i> Aguardando pagamento...</p>
+      <button type="button" class="btn btn--secondary btn--full" id="btnCopyPixCode"><i class="fas fa-copy"></i> Copiar código Pix</button>
+      <p class="pix-pay-note">O pedido será confirmado automaticamente assim que o pagamento for identificado.</p>
+    </div>
+  </div>
+</div>
+
 <!-- Success payment overlay -->
 <div class="success-overlay hidden" id="successOverlay">
   <div class="success-overlay__content">
@@ -1599,6 +1921,90 @@
     <h2>Pedido Criado!</h2>
     <p>Seu pedido foi enviado com sucesso.<br>Acompanhe em "Meus Pedidos".</p>
     <button class="btn btn--primary" id="btnSuccessClose">Entendi</button>
+  </div>
+</div>
+
+<!-- ==================== CAT EDIT MODAL ==================== -->
+<div class="modal-overlay hidden" id="catEditModal">
+  <div class="modal modal--cat-edit">
+    <div class="modal__header">
+      <h2 id="catEditTitle">Nova Categoria</h2>
+      <button class="modal__close" onclick="closeCatEditModal()"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <input type="hidden" id="catEditOriginalName">
+
+      <!-- Name -->
+      <div class="form-group">
+        <label for="catEditName">Nome da Categoria *</label>
+        <input type="text" id="catEditName" class="cat-input-field" autocomplete="off" placeholder="Ex: Pizzas, Bebidas, Almoço...">
+      </div>
+
+      <!-- Schedule -->
+      <div class="form-group">
+        <label>Aparece em qual horário?</label>
+        <div class="cat-schedule-grid">
+          <label class="cat-schedule-opt">
+            <input type="checkbox" id="catEditLunch">
+            <span class="cat-schedule-opt__chip cat-schedule-opt__chip--lunch">
+              <i class="fas fa-sun"></i>
+              <span>Almoço</span>
+            </span>
+          </label>
+          <label class="cat-schedule-opt">
+            <input type="checkbox" id="catEditDinner">
+            <span class="cat-schedule-opt__chip cat-schedule-opt__chip--dinner">
+              <i class="fas fa-moon"></i>
+              <span>Jantar</span>
+            </span>
+          </label>
+        </div>
+        <p class="form-hint"><i class="fas fa-info-circle"></i> Se nenhum for selecionado, a categoria aparece em todos os horários.</p>
+      </div>
+
+      <!-- Subcategories -->
+      <div class="form-group">
+        <label>Subcategorias <small style="color:var(--text-muted);font-weight:400;">(opcional)</small></label>
+        <div id="catEditSubcatList" class="cat-edit-subcat-list"></div>
+        <div class="subcat-inline-add" style="margin-top:8px;">
+          <input type="text" id="catEditSubcatInput" class="subcat-inline-input"
+            placeholder="Nome da subcategoria..."
+            autocomplete="off"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();addSubcatToEdit();}">
+          <button type="button" class="cat-btn cat-btn--ghost" onclick="addSubcatToEdit()">
+            <i class="fas fa-plus"></i> Adicionar
+          </button>
+        </div>
+      </div>
+
+      <!-- Products section (shows when editing existing category) -->
+      <div id="catEditProductsSection" class="form-group cat-edit-products-section">
+        <label>Produtos nesta categoria <span id="catEditProdCount" class="cat-edit-prod-count"></span></label>
+        <div id="catEditEmptyWarning" class="cat-edit-empty-warning hidden">
+          <i class="fas fa-exclamation-triangle"></i>
+          Categoria vazia — não aparecerá no site até ter pelo menos um produto.
+        </div>
+        <div id="catEditProdList" class="cat-edit-prod-list"></div>
+        <div class="cat-edit-mover">
+          <button type="button" class="cat-edit-mover__toggle" id="catEditMoverToggle" onclick="toggleCatEditMover()">
+            <i class="fas fa-exchange-alt"></i> Mover produtos de outra categoria para cá
+            <i class="fas fa-chevron-down cat-edit-mover__arrow" id="catEditMoverArrow"></i>
+          </button>
+          <div id="catEditMoverPanel" class="cat-edit-mover__panel hidden">
+            <input type="text" id="catEditProdSearch" class="subcat-inline-input cat-edit-prod-search"
+              placeholder="Buscar produto..." oninput="filterCatEditMoverProds()">
+            <div id="catEditOtherProdList" class="cat-edit-other-prod-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-actions" style="margin-top:24px;">
+        <button type="button" class="btn btn--outline-sm" onclick="closeCatEditModal()">Cancelar</button>
+        <button type="button" class="btn btn--primary" onclick="saveCatEdit()" id="catEditSaveBtn">
+          <i class="fas fa-save"></i> Salvar Categoria
+        </button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1640,8 +2046,100 @@
   </div>
 </div>
 
+<!-- ==================== CLIENT CREATE/EDIT MODAL ==================== -->
+<div class="modal-overlay hidden" id="clientFormModal">
+  <div class="modal modal--md">
+    <div class="modal__header">
+      <h2 id="clientFormTitle">Novo Cliente</h2>
+      <button class="modal__close" onclick="closeClientForm()"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal__body">
+      <input type="hidden" id="clientFormId">
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label for="clientFormNome">Nome *</label>
+          <input type="text" id="clientFormNome" placeholder="Nome completo..." autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label for="clientFormTelefone">Telefone</label>
+          <input type="tel" id="clientFormTelefone" placeholder="(11) 99999-9999">
+        </div>
+        <div class="form-group">
+          <label for="clientFormEmail">E-mail</label>
+          <input type="email" id="clientFormEmail" placeholder="email@exemplo.com">
+        </div>
+        <div class="form-group">
+          <label for="clientFormEndereco">Endereço</label>
+          <input type="text" id="clientFormEndereco" placeholder="Rua, número, bairro...">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="clientFormNotas">Observações</label>
+        <textarea id="clientFormNotas" rows="3" placeholder="Preferências, restrições alimentares, notas..."></textarea>
+      </div>
+      <div class="form-actions" style="margin-top:20px;">
+        <button type="button" class="btn btn--outline-sm" onclick="closeClientForm()">Cancelar</button>
+        <button type="button" class="btn btn--primary" onclick="saveClient()"><i class="fas fa-save"></i> Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== CLIENT DETAIL MODAL ==================== -->
+<div class="modal-overlay hidden" id="clientDetailModal">
+  <div class="modal modal--client-detail">
+    <div class="modal__header">
+      <h2 id="clientDetailName">Cliente</h2>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn btn--outline-sm btn--sm" id="btnEditClientDetail" onclick="editClientFromDetail()"><i class="fas fa-pen"></i> Editar</button>
+        <button class="modal__close" onclick="closeClientDetail()"><i class="fas fa-times"></i></button>
+      </div>
+    </div>
+    <div class="modal__body">
+      <!-- Info + Stats row -->
+      <div class="client-detail-top">
+        <div class="client-detail-info">
+          <div class="client-detail-info__row"><i class="fas fa-envelope"></i> <span id="clientDetailEmail">—</span></div>
+          <div class="client-detail-info__row"><i class="fas fa-phone"></i> <span id="clientDetailPhone">—</span></div>
+          <div class="client-detail-info__row"><i class="fas fa-map-marker-alt"></i> <span id="clientDetailAddress">—</span></div>
+        </div>
+        <div class="client-detail-stats">
+          <div class="client-stat-card">
+            <div class="client-stat-card__value" id="clientDetailOrders">0</div>
+            <div class="client-stat-card__label">Pedidos</div>
+          </div>
+          <div class="client-stat-card">
+            <div class="client-stat-card__value" id="clientDetailTotal">R$ 0</div>
+            <div class="client-stat-card__label">Total Gasto</div>
+          </div>
+          <div class="client-stat-card">
+            <div class="client-stat-card__value" id="clientDetailAvg">R$ 0</div>
+            <div class="client-stat-card__label">Ticket Médio</div>
+          </div>
+          <div class="client-stat-card client-stat-card--highlight">
+            <div class="client-stat-card__value" id="clientDetailDays">—</div>
+            <div class="client-stat-card__label">Última compra: <span id="clientDetailLast">—</span></div>
+          </div>
+        </div>
+      </div>
+      <!-- Notes -->
+      <div class="form-group" id="clientDetailNotesGroup" style="margin-top:16px;">
+        <label>Observações</label>
+        <textarea id="clientDetailNotes" rows="2" placeholder="Nenhuma observação" style="resize:vertical;" oninput="markClientNotesDirty()"></textarea>
+        <button class="btn btn--outline-sm btn--sm" id="btnSaveNotes" onclick="saveClientNotes()" style="margin-top:6px;display:none;"><i class="fas fa-save"></i> Salvar observações</button>
+      </div>
+      <!-- Order history -->
+      <div style="margin-top:16px;">
+        <h4 style="font-size:.85rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Histórico de Pedidos</h4>
+        <div id="clientDetailHistory" class="client-order-history"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="geocode.js?v=20260509-01"></script>
-<script src="main.js?v=20260430-02"></script>
+<script src="print-studio.js?v=20260524-05"></script>
+<script src="main.js?v=20260524-05"></script>
 </body>
 </html>
 

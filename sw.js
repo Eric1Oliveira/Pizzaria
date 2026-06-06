@@ -1,7 +1,7 @@
 // Service Worker — Casa José Silva Pizzaria
 // Cache-first para assets estáticos, network-first para API
 
-const CACHE_NAME = 'cjspizza-v6';
+const CACHE_NAME = 'cjspizza-v9';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
